@@ -7,7 +7,8 @@ from distvae.models.vae import PatchDecoder
 from distvae.modules.adapters.unets.unet_2d_blocks_adapters import UpDecoderBlock2DAdapter
 from distvae.modules.adapters.layers.norm_adapters import GroupNormAdapter
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter
-
+from distvae.utils import DistributedEnv
+from torch.distributed import ProcessGroup
 from diffusers.models.autoencoders.vae import Decoder
 from diffusers.models.unets.unet_2d_blocks import UpDecoderBlock2D
 
@@ -18,6 +19,7 @@ class DecoderAdapter(nn.Module):
     def __init__(
         self, 
         decoder: Decoder, 
+        vae_group: ProcessGroup = None,
         *,
         use_profiler: bool = False,
         conv_block_size = 0,
@@ -26,6 +28,7 @@ class DecoderAdapter(nn.Module):
         assert isinstance(decoder.conv_norm_out, nn.GroupNorm), "DecoderAdapter dose not support normalization method except GroupNorm"
         for up_block in decoder.up_blocks:
             assert isinstance(up_block, UpDecoderBlock2D), "DecoderAdapter dose not support up block except UpDecoderBlock2D"
+        DistributedEnv.initialize(vae_group)
         self.decoder = PatchDecoder()
         self.decoder.layers_per_block = decoder.layers_per_block
         self.decoder.conv_in = decoder.conv_in
@@ -37,14 +40,14 @@ class DecoderAdapter(nn.Module):
         self.decoder.conv_act = decoder.conv_act
         self.decoder.conv_out = Conv2dAdapter(decoder.conv_out, block_size=conv_block_size)
         self.use_profiler = use_profiler
-
+        self.vae_group = vae_group
 
     def forward(
         self,
         sample: torch.FloatTensor,
         latent_embeds: Optional[torch.FloatTensor] = None,
     ):
-        rank = torch.distributed.get_rank()
+        rank = DistributedEnv.get_global_rank()
         start_time = time.time()
         elapsed_time = 0
         if self.use_profiler:

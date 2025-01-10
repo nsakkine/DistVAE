@@ -8,6 +8,7 @@ import torch.distributed as dist
 from torch import Tensor
 
 from diffusers.models.activations import get_activation
+from distvae.utils import DistributedEnv
 
 #TODO test and fix
 class PatchAdaGroupNorm(nn.Module):
@@ -32,22 +33,22 @@ class PatchAdaGroupNorm(nn.Module):
         emb = emb[:, :, None, None]
         scale, shift = emb.chunk(2, dim=1)
 
-        world_size = dist.get_world_size()
+        world_size = DistributedEnv.get_world_size()
         height_list = [torch.empty([1], dtype=torch.int64) for _ in range(world_size)]
-        dist.all_gather(height_list, torch.tensor([x.shape[2]], dtype=torch.int64))
+        dist.all_gather(height_list, torch.tensor([x.shape[2]], dtype=torch.int64), group=DistributedEnv.get_vae_group())
         height = torch.tensor(height_list).sum()
 
         channels_per_group = x.shape[1] // self.num_groups
         
         partial_sum = x.sum_to_size(x.shape[0], self.num_groups)
         partial_sum_list = [torch.empty([x.shape[0], self.num_groups], dtype=x.dtype, device=x.device) for _ in range(world_size)]
-        dist.all_gather(partial_sum_list, partial_sum)
+        dist.all_gather(partial_sum_list, partial_sum, group=DistributedEnv.get_vae_group())
         group_sum = torch.tensor(partial_sum_list).sum(dim=0)
         E = group_sum / (channels_per_group * height * x.shape[-1])
         
         partial_var = ((x - E) ** 2).sum_to_size(x.shape[0], self.num_groups)
         partial_var_list = [torch.empty([x.shape[0], self.num_groups], dtype=x.dtype, device=x.device) for _ in range(world_size)]
-        dist.all_gather(partial_var_list, partial_var)
+        dist.all_gather(partial_var_list, partial_var, group=DistributedEnv.get_vae_group())
         group_var = torch.tensor(partial_var_list).sum(dim=0)
         var = group_var / (channels_per_group * height * x.shape[-1])
 
@@ -106,12 +107,12 @@ class PatchGroupNorm(nn.GroupNorm):
                  device=None, dtype=None) -> None:
         super().__init__(num_groups=num_groups, num_channels=num_channels, eps=eps, 
                          affine=affine, device=device, dtype=dtype)
-
+    @torch.no_grad()
     def forward(self, x: Tensor) -> Tensor:
+        x = x.detach()
         # get height
         height = torch.tensor(x.shape[-2], dtype=torch.int64, device=x.device)
-        dist.all_reduce(height)
-
+        dist.all_reduce(height, group=DistributedEnv.get_vae_group())
         channels_per_group = x.shape[1] // self.num_groups
         nelements_rank = channels_per_group * x.shape[-2] * x.shape[-1]
         nelements = channels_per_group * height * x.shape[-1]
@@ -119,14 +120,14 @@ class PatchGroupNorm(nn.GroupNorm):
         x = x.view(x.shape[0], self.num_groups, -1, x.shape[-2], x.shape[-1])
         group_sum = x.mean(dim=(2,3,4), dtype=torch.float32)
         group_sum = group_sum * nelements_rank
-        dist.all_reduce(group_sum)
+        dist.all_reduce(group_sum, group=DistributedEnv.get_vae_group())
         # shape: [bs, num_groups, 1, 1, 1]
         E = (group_sum / nelements)[:, :, None, None, None].to(x.dtype)
 
         group_var_sum = torch.empty((x.shape[0], self.num_groups), dtype=torch.float32, device=x.device)
         torch.var(x, dim=(2,3,4), out=group_var_sum)
         group_var_sum = group_var_sum * nelements_rank
-        dist.all_reduce(group_var_sum)
+        dist.all_reduce(group_var_sum, group=DistributedEnv.get_vae_group())
         # shape: [bs, num_groups, 1, 1, 1]
         var = (group_var_sum / nelements)[:, :, None, None, None].to(x.dtype)
 
