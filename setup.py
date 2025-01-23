@@ -13,7 +13,7 @@ if __name__ == "__main__":
         author_email="eigensystem1318@gmail.com",
         packages=find_packages(),
         install_requires=["torch>=2.2", "diffusers>=0.27.2", "transformers"],
-        url="https://github.com/PipeFusion/DistVAE.",
+        url="https://github.com/xdit-project/DistVAE.",
         description="DistVAE: Patch Parallelism Distributed VAE for High-Resolution image generation",
         long_description=None,
         long_description_content_type="text/markdown",
