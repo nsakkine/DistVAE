@@ -125,8 +125,8 @@ class PatchConv2d(nn.Conv2d):
             
         else:
         # 1. get the meta data of input tensor and conv operation
-            patch_height_list = [torch.zeros(1, dtype=torch.int64, device=f"cuda:{local_rank}") for _ in range(group_world_size)]
-            dist.all_gather(patch_height_list, torch.tensor([h], dtype=torch.int64, device=f"cuda:{local_rank}"), group=DistributedEnv.get_vae_group())
+            patch_height_list = [torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device()) for _ in range(group_world_size)]
+            dist.all_gather(patch_height_list, torch.tensor([h], dtype=torch.int64, device=DistributedEnv.get_device()), group=DistributedEnv.get_vae_group())
             patch_height_index = self._calc_patch_height_index(patch_height_list)
             halo_width = self._calc_halo_width_in_h_dim(rank_in_group,  patch_height_index, self.kernel_size[0], self.padding[0], self.stride[0])
             prev_bottom_halo_width: int = 0
@@ -158,7 +158,7 @@ class PatchConv2d(nn.Conv2d):
                 # recv from prev
                 assert patch_height_index[rank_in_group] - halo_width[0] >= patch_height_index[rank_in_group-1], \
                     "width of top halo region is larger than the height of input tensor of last rank"
-                top_halo_recv = torch.empty([bs, channels, halo_width[0], w], dtype=input.dtype, device=f"cuda:{local_rank}")
+                top_halo_recv = torch.empty([bs, channels, halo_width[0], w], dtype=input.dtype, device=DistributedEnv.get_device())
                 global_rank_of_prev = DistributedEnv.get_global_rank_from_group_rank(rank_in_group - 1)
                 dist.recv(top_halo_recv, global_rank_of_prev, group=DistributedEnv.get_vae_group())
 
@@ -174,7 +174,7 @@ class PatchConv2d(nn.Conv2d):
                 # recv from next
                 assert patch_height_index[rank_in_group+1] + halo_width[1] < patch_height_index[rank_in_group+2], \
                     "width of bottom halo region is larger than the height of input tensor of next rank"
-                bottom_halo_recv = torch.empty([bs, channels, halo_width[1], w], dtype=input.dtype, device=f"cuda:{local_rank}")
+                bottom_halo_recv = torch.empty([bs, channels, halo_width[1], w], dtype=input.dtype, device=DistributedEnv.get_device())
                 if global_rank_of_next is None:
                     global_rank_of_next = DistributedEnv.get_global_rank_from_group_rank(rank_in_group + 1)
                 dist.recv(bottom_halo_recv, global_rank_of_next, group=DistributedEnv.get_vae_group())

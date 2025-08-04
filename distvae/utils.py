@@ -1,6 +1,12 @@
+import torch
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
 import os
+
+try:
+    import torch_musa
+except ModuleNotFoundError:
+    pass
 
 class DistributedEnv:
     _vae_group = None
@@ -68,3 +74,51 @@ class DistributedEnv:
     @classmethod
     def get_local_rank(cls) -> int:
         return cls._local_rank
+
+    @classmethod
+    def get_device(cls) -> torch.device:
+        if torch.cuda.is_available():
+            return torch.device(f"cuda:{cls.get_local_rank()}")
+        elif hasattr(torch, "musa") and torch.musa.is_available():
+            return torch.device(f"musa:{cls.get_local_rank()}")
+        else:
+            return torch.device("cpu")
+
+    @classmethod
+    def get_device_type(cls) -> str:
+        if torch.cuda.is_available():
+            return "cuda"
+        elif hasattr(torch, "musa") and torch.musa.is_available():
+            return "musa"
+        else:
+            return "cpu"
+
+    @classmethod
+    def get_torch_distributed_backend(cls) -> str:
+        if torch.cuda.is_available():
+            return "nccl"
+        elif hasattr(torch, "musa") and torch.musa.is_available():
+            return "mccl"
+        else:
+            raise NotImplementedError("No Accelerators(NV/MTT GPU accelerators) available")
+
+    @classmethod
+    def record_memory_history(cls):
+        device_type = cls.get_device_type()
+        if device_type == "cuda":
+            torch.cuda.memory._record_memory_history(enabled=None)
+        elif device_type == "musa":
+            torch.musa.memory._record_memory_history(enabled=None)
+        else:
+            print(f"[Warning] Unknown device type: {device_type}, memory history not recorded.")
+
+    @classmethod
+    def get_peak_memory(cls, device):
+        device_type = cls.get_device_type()
+        if device_type == "cuda":
+            return torch.cuda.max_memory_allocated(device)
+        elif device_type == "musa":
+            return torch.musa.max_memory_allocated(device)
+        else:
+            print(f"[Warning] Unknown device type: {device_type}, peak memory not available.")
+            return None

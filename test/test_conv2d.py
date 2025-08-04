@@ -1,12 +1,21 @@
 from distvae.models.layers.conv2d import PatchConv2d
 from distvae.modules.patch_utils import Patchify, DePatchify
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter
+from distvae.utils import DistributedEnv
 
 import torch
 import random
 import argparse
 import torch.distributed as dist
 from torch import nn
+from torch.cuda import set_device, device_count
+from torch.cuda import manual_seed as device_manual_seed
+try:
+    import torch_musa
+    from torch_musa.core.device import set_device, device_count
+    from torch_musa.core.random import manual_seed as device_manual_seed
+except ModuleNotFoundError:
+    pass
 
 class Conv2dModules(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding):
@@ -27,8 +36,7 @@ class Conv2dModules(nn.Module):
 def set_seed(seed: int = 42):
     random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-
+    device_manual_seed(seed)
 
 def main():
     set_seed()
@@ -46,12 +54,12 @@ def main():
         default=1024,
         help="The width of image",
     )
-    args = parser.parse_args() 
-    dist.init_process_group(backend="nccl")
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-    torch.device('cuda', rank)
-
+    args = parser.parse_args()
+    backend = DistributedEnv.get_torch_distributed_backend()
+    dist.init_process_group(backend=backend)
+    device = torch.distributed.get_rank() % device_count()
+    set_device(device)
+    DistributedEnv.initialize(None)
     in_channels = 64
     out_channels = 3
     for kernel_size in range(3,4):
@@ -60,17 +68,17 @@ def main():
     # for kernel_size in range(3,10):
     #     for stride in range(1,kernel_size+1):
     #         for padding in range(1,kernel_size):
-                convs = Conv2dModules(in_channels, out_channels, kernel_size, stride, padding).to(f"cuda:{rank}")
+                convs = Conv2dModules(in_channels, out_channels, kernel_size, stride, padding).to(device)
                 patch_convs = nn.ModuleList()
                 for conv in convs.convs:
                     patch_convs.append(Conv2dAdapter(conv))
-                patch_convs = patch_convs.to(f"cuda:{rank}")
+                patch_convs = patch_convs.to(device)
 
-                hidden_state = torch.randn(1, 64, args.height, args.width, device=f"cuda:{rank}")
+                hidden_state = torch.randn(1, 64, args.height, args.width, device=device)
                 result = convs(hidden_state)
 
                 
-                if rank == 0: 
+                if dist.get_rank() == 0: 
                     print(kernel_size, stride, padding, "start", flush=True)
                 patch = Patchify()
                 depatch = DePatchify()
@@ -82,7 +90,7 @@ def main():
 
 
 
-                if rank == 0:
+                if dist.get_rank() == 0:
                     max_height = (hidden_state.shape[2] + padding * 2 - kernel_size + 1 + stride - 1) // stride
                     # print(result)
                     # print(ppresult)
@@ -105,6 +113,8 @@ def main():
 
     # assert torch.equal(result, ppresult), "two hidden states are not equal"
 
+    dist.barrier()
+    dist.destroy_process_group()
 
 if __name__ == "__main__":
     main()

@@ -1,5 +1,6 @@
 from typing import Optional
 import time
+import logging
 
 import torch
 import torch.nn as nn
@@ -14,6 +15,10 @@ from diffusers.models.unets.unet_2d_blocks import UpDecoderBlock2D
 
 from torch.profiler import profile, record_function, ProfilerActivity
 
+try:
+    import torch_musa
+except ModuleNotFoundError:
+    pass
 
 class DecoderAdapter(nn.Module):
     def __init__(
@@ -48,15 +53,19 @@ class DecoderAdapter(nn.Module):
         latent_embeds: Optional[torch.FloatTensor] = None,
     ):
         rank = DistributedEnv.get_global_rank()
+        device_type = DistributedEnv.get_device_type()
         start_time = time.time()
         elapsed_time = 0
         if self.use_profiler:
-            torch.cuda.memory._record_memory_history(enabled=None)
+            if device_type == "musa":
+                torch.musa.memory._record_memory_history(enabled=None)
+                activities=[ProfilerActivity.CPU,ProfilerActivity.MUSA]
+            else:
+                torch.cuda.memory._record_memory_history(enabled=None)
+                activities=[ProfilerActivity.CPU,ProfilerActivity.CUDA]
+
             with profile(
-                activities=[
-                    ProfilerActivity.CPU,
-                    ProfilerActivity.CUDA
-                ],
+                activities=activities,
                 on_trace_ready=torch.profiler.tensorboard_trace_handler(
                     f"./profile/patch_vae_{rank}"
                 ),
@@ -71,7 +80,7 @@ class DecoderAdapter(nn.Module):
 
         end_time = time.time()
         elapsed_time = end_time - start_time
-        peak_memory = torch.cuda.max_memory_allocated(device="cuda")
+        peak_memory = DistributedEnv.get_peak_memory(device_type)
 
         if rank == 0:
             print(f"Patch vae: [elapsed_time: {elapsed_time:.2f} sec, peak_memory: {peak_memory/1e9} GB]")

@@ -25,13 +25,13 @@ class DePatchify(nn.Module):
         self.local_rank = DistributedEnv.get_local_rank()
     
     def forward(self, patch_hidden_state):
-        patch_height_list = [torch.empty([1], dtype=torch.int64, device=f"cuda:{self.local_rank}") for _ in range(self.group_world_size)]
+        patch_height_list = [torch.empty([1], dtype=torch.int64, device=DistributedEnv.get_device()) for _ in range(self.group_world_size)]
         dist.all_gather(
             patch_height_list, 
             torch.tensor(
                 [patch_hidden_state.shape[2]], 
                 dtype=torch.int64, 
-                device=f"cuda:{self.local_rank}"
+                device=DistributedEnv.get_device()
             ),
             group=DistributedEnv.get_vae_group()
         )
@@ -39,7 +39,7 @@ class DePatchify(nn.Module):
             torch.empty(
                 [patch_hidden_state.shape[0], patch_hidden_state.shape[1], patch_height_list[i].item(), patch_hidden_state.shape[-1]], 
                 dtype=patch_hidden_state.dtype,
-                device=f"cuda:{self.local_rank}"
+                device=DistributedEnv.get_device()
             ) for i in range(self.group_world_size)
         ]
         dist.all_gather(
