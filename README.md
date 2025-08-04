@@ -28,6 +28,7 @@ def set_seed(seed: int = 42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
 
+@torch.no_grad()
 def main():
     # init
     set_seed()
