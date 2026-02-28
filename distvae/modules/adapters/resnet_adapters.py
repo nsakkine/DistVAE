@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
-from distvae.models.resnet import PatchResnetBlock2D
-from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter
-from distvae.modules.adapters.layers.norm_adapters import GroupNormAdapter
 
+from distvae.models.resnet import PatchResnetBlock2D
+from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
+from distvae.modules.adapters.layers.norm_adapters import GroupNormAdapter
 from diffusers.models.resnet import ResnetBlock2D
+from diffusers.models.autoencoder.autoencoder_kl_wan import WanResidualBlock
+
 
 class ResnetBlock2DAdapter(nn.Module):
     def __init__(
@@ -16,7 +18,7 @@ class ResnetBlock2DAdapter(nn.Module):
         super().__init__()
         assert resnet.time_emb_proj is None, "temb_channels is not supported in ResnetBlock2DAdapter currently"
         assert resnet.up is False, "up sample is not supported in ResnetBlock2DAdapter currently"
-        assert resnet.down is False, "ResnetBlock2DAdapter dose not support down sample is not supported in  currently"
+        assert resnet.down is False, "ResnetBlock2DAdapter does not support down sample currently"
         self.resnet = PatchResnetBlock2D(
             in_channels=resnet.in_channels,
             out_channels=resnet.out_channels,
@@ -45,3 +47,16 @@ class ResnetBlock2DAdapter(nn.Module):
 
     def forward(self, x, temb: torch.FloatTensor = None, *args, **kwargs):
         return self.resnet(x, temb, *args, **kwargs)
+
+
+class WanResidualBlockAdapter(nn.Module):
+    def __init__(self, wan_residual_block: WanResidualBlock, conv_block_size = 0):
+        super().__init__()
+        assert isinstance(wan_residual_block, WanResidualBlock), "WanResidualBlockAdapter does not support resnet except WanResidualBlock"
+        self.residual_block = wan_residual_block
+        self.residual_block.conv1 = WanCausalConv3dAdapter(wan_residual_block.conv1, block_size=conv_block_size)
+        self.residual_block.conv2 = WanCausalConv3dAdapter(wan_residual_block.conv2, block_size=conv_block_size)
+        self.residual_block.conv_shortcut = WanCausalConv3dAdapter(wan_residual_block.conv_shortcut, block_size=conv_block_size) if wan_residual_block.conv_shortcut is not None else None
+
+    def forward(self, x, feat_cache=None, feat_idx=[0]):
+        return self.residual_block(x, feat_cache=feat_cache, feat_idx=feat_idx)
