@@ -115,9 +115,12 @@ class WanDecoderAdapter(nn.Module):
         *,
         use_profiler: bool = False,
         conv_block_size = 0,
+        patch_dim: int = 3,
     ):
         super().__init__()
         DistributedEnv.initialize(vae_group)
+        self.patch_dim = patch_dim
+        DistributedEnv.set_patch_dim(patch_dim)
         self.decoder = decoder
         self.decoder.conv_in = WanCausalConv3dAdapter(decoder.conv_in, block_size=conv_block_size)
         self.decoder.mid_block = WanMidBlockAdapter(decoder.mid_block, conv_block_size=conv_block_size)
@@ -139,7 +142,7 @@ class WanDecoderAdapter(nn.Module):
         patchify: bool = True
     ):
         if patchify:
-            original_length = sample.shape[2]
+            original_length = sample.shape[self.patch_dim]
             sample = self.patchify(sample)
         else:
             original_length = None
