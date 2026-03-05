@@ -104,18 +104,19 @@ class PatchConv3d(nn.Conv3d):
         
 
     # in 3d case, padding is a tuple of 6 integers: [left_pad, right_pad, top_pad, bottom_pad, front_pad, back_pad]
-    def _adjust_padding_for_patch(self, padding, rank, world_size):
+    def _adjust_padding_for_patch(self, padding, rank, world_size, causal_f: bool = False):
         if isinstance(padding, tuple):
             padding = list(padding)
         elif isinstance(padding, int):
             padding = [padding] * 6
 
         if rank == 0:
-            padding[-1] = 0
+            padding[-1] = 0  # F_right
         elif rank == world_size - 1:
-            padding[-2] = 0
+            if not causal_f:
+                padding[-2] = 0  # F_left; for causal, last rank keeps F_left so conv has enough context
         else:
-            padding[-2: ] = [0, 0]
+            padding[-2:] = [0, 0]
         return tuple(padding)
 
     def _conv_forward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):
@@ -125,7 +126,7 @@ class PatchConv3d(nn.Conv3d):
 
         if (group_world_size == 1):
             if self.pre_conv_padding is not None:
-                pad = self._adjust_padding_for_patch(self.pre_conv_padding, rank=0, world_size=1)
+                pad = self._adjust_padding_for_patch(self.pre_conv_padding, rank=0, world_size=1, causal_f=True)
                 input = F.pad(input, pad, mode="constant", value=0.0)
                 return F.conv3d(input, weight, bias, self.stride,
                                 _triple(0), self.dilation, self.groups)
@@ -214,7 +215,7 @@ class PatchConv3d(nn.Conv3d):
         # 3. do convolution and postprocess
             conv_res: Tensor
             if self.pre_conv_padding is not None:
-                padding = self._adjust_padding_for_patch(self.pre_conv_padding, rank=rank_in_group, world_size=group_world_size)
+                padding = self._adjust_padding_for_patch(self.pre_conv_padding, rank=rank_in_group, world_size=group_world_size, causal_f=True)
                 input = F.pad(input, padding, mode="constant", value=0.0)
             else:
                 padding = self._adjust_padding_for_patch(self._reversed_padding_repeated_twice, rank=rank_in_group, world_size=group_world_size)
