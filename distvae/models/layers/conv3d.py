@@ -222,7 +222,11 @@ class PatchConv3d(nn.Conv3d):
                     conv_res = F.conv3d(input, weight, bias, self.stride,
                                     _triple(0), self.dilation, self.groups)
 #                    conv_res = conv_res[:, :, halo_width[0]:halo_width[0] + patch_f, :, :].contiguous()
-#                    return conv_res
+                    if halo_width[1] == 0:
+                        conv_res = conv_res[:, :, halo_width[0]:, :, :].contiguous()
+                    else:
+                        conv_res = conv_res[:, :, halo_width[0]:-halo_width[1], :, :]
+                    return conv_res
                 if self.padding_mode != 'zeros':
                     conv_res = F.conv3d(F.pad(input, padding, mode=self.padding_mode),
                                     weight, bias, self.stride,
