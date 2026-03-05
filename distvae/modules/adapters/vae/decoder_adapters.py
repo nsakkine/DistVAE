@@ -16,7 +16,7 @@ from distvae.modules.patch_utils import Patchify, DePatchify
 from distvae.utils import DistributedEnv
 from diffusers.models.autoencoders.vae import Decoder
 from diffusers.models.unets.unet_2d_blocks import UpDecoderBlock2D
-from diffusers.models.autoencoder.autoencoder_kl_wan import (
+from diffusers.models.autoencoders.autoencoder_kl_wan import (
     WanRMS_norm,
     WanMidBlock,
 )

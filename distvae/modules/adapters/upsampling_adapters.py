@@ -7,7 +7,7 @@ from distvae.models.upsampling import PatchUpsample2D
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
 from diffusers.models.upsampling import Upsample2D
-from diffusers.models.autoencoder.autoencoder_kl_wan import WanResample, WanUpBlock
+from diffusers.models.autoencoders.autoencoder_kl_wan import WanResample, WanUpBlock
 
 
 class Upsample2DAdapter(nn.Module):

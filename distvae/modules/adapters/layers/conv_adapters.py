@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from diffusers.models.autoencoder.autoencoder_kl_wan import WanCausalConv3d
+from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d
 from distvae.models.layers.conv2d import PatchConv2d
 from distvae.models.layers.conv3d import PatchConv3d
 
