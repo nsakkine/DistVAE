@@ -76,24 +76,25 @@ class WanCausalConv3dAdapter(nn.Module):
         block_size = 0,
     ):
         super().__init__()
+        # Causal padding is applied inside PatchConv3d via pre_conv_padding; use padding=0.
         self.conv3d = PatchConv3d(
             in_channels=causal_conv3d.in_channels,
             out_channels=causal_conv3d.out_channels,
             kernel_size=causal_conv3d.kernel_size,
             stride=causal_conv3d.stride,
-            padding=causal_conv3d.padding,
+            padding=0,
+            dilation=causal_conv3d.dilation,
+            groups=causal_conv3d.groups,
+            bias=causal_conv3d.bias is not None,
+            padding_mode=causal_conv3d.padding_mode,
+            device=causal_conv3d.weight.device,
+            dtype=causal_conv3d.weight.dtype,
             block_size=block_size,
+            pre_conv_padding=causal_conv3d._padding,
         )
         self.conv3d.weight.data = causal_conv3d.weight.data
         self.conv3d.bias.data = causal_conv3d.bias.data
-        self._padding = causal_conv3d._padding
-        self.padding = causal_conv3d.padding
 
     def forward(self, x, cache_x=None):
-        padding = list(self._padding)
-        if cache_x is not None and self._padding[4] > 0:
-            cache_x = cache_x.to(x.device)
-            x = torch.cat([cache_x, x], dim=2)
-            padding[4] -= cache_x.shape[2]
-        x = nn.functional.pad(x, padding)
+        # Cache not supported; causal padding is handled inside PatchConv3d.
         return self.conv3d(x)

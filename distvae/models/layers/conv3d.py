@@ -23,7 +23,8 @@ class PatchConv3d(nn.Conv3d):
         padding_mode: str = 'zeros',  # TODO: refine this type
         device=None,
         dtype=None,
-        block_size: Union[int, Tuple[int, int, int]] = 0
+        block_size: Union[int, Tuple[int, int, int]] = 0,
+        pre_conv_padding: Optional[Tuple[int, int, int, int, int, int]] = None,
     ) -> None:
 
         if isinstance(dilation, int):
@@ -32,6 +33,7 @@ class PatchConv3d(nn.Conv3d):
             for i in dilation:
                 assert i == 1, "dilation is not supported in PatchConv3d"
         self.block_size = block_size
+        self.pre_conv_padding = pre_conv_padding
         super().__init__(
             in_channels, out_channels, kernel_size, stride, padding, dilation, 
             groups, bias, padding_mode, device, dtype)
@@ -116,6 +118,11 @@ class PatchConv3d(nn.Conv3d):
         group_world_size, global_rank, rank_in_group, local_rank = self._get_world_size_and_rank()
 
         if (group_world_size == 1):
+            if self.pre_conv_padding is not None:
+                pad = self._adjust_padding_for_patch(self.pre_conv_padding, rank=0, world_size=1)
+                input = F.pad(input, pad, mode="constant", value=0.0)
+                return F.conv3d(input, weight, bias, self.stride,
+                                _triple(0), self.dilation, self.groups)
             if self.padding_mode != 'zeros':
                 return F.conv3d(F.pad(input, self._reversed_padding_repeated_twice, mode=self.padding_mode),
                                 weight, bias, self.stride,
@@ -125,16 +132,20 @@ class PatchConv3d(nn.Conv3d):
             
         else:
         # 1. get the meta data of input tensor and conv operation
+            patch_f = f  # patch F size before halo; used for crop when pre_conv_padding is set
+            effective_padding_f = 0 if self.pre_conv_padding is not None else (
+                self.padding[0] if isinstance(self.padding, tuple) else self.padding
+            )
             patch_height_list = [torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device()) for _ in range(group_world_size)]
             dist.all_gather(patch_height_list, torch.tensor([f], dtype=torch.int64, device=DistributedEnv.get_device()), group=DistributedEnv.get_vae_group())
             patch_height_index = self._calc_patch_index(patch_height_list)
-            halo_width = self._calc_halo_width(rank_in_group,  patch_height_index, self.kernel_size[0], self.padding[0], self.stride[0])
+            halo_width = self._calc_halo_width(rank_in_group,  patch_height_index, self.kernel_size[0], effective_padding_f, self.stride[0])
             prev_bottom_halo_width: int = 0
             next_top_halo_width: int = 0
             if rank_in_group != 0:
-                prev_bottom_halo_width = self._calc_bottom_halo_width(rank_in_group - 1, patch_height_index, self.kernel_size[0], self.padding[0], self.stride[0])
+                prev_bottom_halo_width = self._calc_bottom_halo_width(rank_in_group - 1, patch_height_index, self.kernel_size[0], effective_padding_f, self.stride[0])
             if rank_in_group != group_world_size - 1:
-                next_top_halo_width = self._calc_top_halo_width(rank_in_group + 1, patch_height_index, self.kernel_size[0], self.padding[0], self.stride[0])
+                next_top_halo_width = self._calc_top_halo_width(rank_in_group + 1, patch_height_index, self.kernel_size[0], effective_padding_f, self.stride[0])
                 next_top_halo_width = max(0, next_top_halo_width)
             
 
@@ -196,9 +207,18 @@ class PatchConv3d(nn.Conv3d):
 
         # 3. do convolution and postprocess
             conv_res: Tensor
-            padding = self._adjust_padding_for_patch(self._reversed_padding_repeated_twice, rank=rank_in_group, world_size=group_world_size)
+            if self.pre_conv_padding is not None:
+                padding = self._adjust_padding_for_patch(self.pre_conv_padding, rank=rank_in_group, world_size=group_world_size)
+                input = F.pad(input, padding, mode="constant", value=0.0)
+            else:
+                padding = self._adjust_padding_for_patch(self._reversed_padding_repeated_twice, rank=rank_in_group, world_size=group_world_size)
             bs, channels, f, h, w = input.shape
             if self.block_size == 0 or (f <= self.block_size and h <= self.block_size and w <= self.block_size):
+                if self.pre_conv_padding is not None:
+                    conv_res = F.conv3d(input, weight, bias, self.stride,
+                                    _triple(0), self.dilation, self.groups)
+                    conv_res = conv_res[:, :, halo_width[0]:halo_width[0] + patch_f, :, :].contiguous()
+                    return conv_res
                 if self.padding_mode != 'zeros':
                     conv_res = F.conv3d(F.pad(input, padding, mode=self.padding_mode),
                                     weight, bias, self.stride,
@@ -220,10 +240,11 @@ class PatchConv3d(nn.Conv3d):
         # 3.1. if block_size is not 0, split patch to block and do convolution to 
                 # reduce memory spike
             else:
-                if self.padding_mode != "zeros":
-                    input = F.pad(input, padding, mode=self.padding_mode)
-                elif self.padding != 0:
-                    input = F.pad(input, padding, mode="constant")
+                if self.pre_conv_padding is None:
+                    if self.padding_mode != "zeros":
+                        input = F.pad(input, padding, mode=self.padding_mode)
+                    elif self.padding != 0:
+                        input = F.pad(input, padding, mode="constant")
 
                 _, _, f, h, w = input.shape
                 num_chunks_in_f = 0
@@ -308,4 +329,7 @@ class PatchConv3d(nn.Conv3d):
                             )
                         outer_output.append(torch.cat(inner_output, dim=-1))
                     outputs.append(torch.cat(outer_output, dim=-2))
-                return torch.cat(outputs, dim=-3)
+                out = torch.cat(outputs, dim=-3)
+                if self.pre_conv_padding is not None:
+                    out = out[:, :, halo_width[0]:halo_width[0] + patch_f, :, :].contiguous()
+                return out
