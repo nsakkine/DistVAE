@@ -70,5 +70,5 @@ class WanUpBlockAdapter(nn.Module):
                 WanResampleAdapter(upsampler, conv_block_size=conv_block_size) for upsampler in wan_up_block.upsamplers
             ])
 
-    def forward(self, x, feat_cache=None, feat_idx=[0]):
-        return self.up_block(x, feat_cache=feat_cache, feat_idx=feat_idx)
+    def forward(self, x, feat_cache=None, feat_idx=[0], first_chunk=False):
+        return self.up_block(x, feat_cache=feat_cache, feat_idx=feat_idx, first_chunk=first_chunk)
