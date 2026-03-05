@@ -189,7 +189,7 @@ class PatchConv3d(nn.Conv3d):
             
             if halo_width[1] > 0:
                 # recv from next
-                assert patch_height_index[rank_in_group+1] + halo_width[1] < patch_height_index[rank_in_group+2], \
+                assert patch_height_index[rank_in_group+1] + halo_width[1] <= patch_height_index[rank_in_group+2], \
                     "width of bottom halo region is larger than the height of input tensor of next rank"
                 bottom_halo_recv = torch.empty([bs, channels, halo_width[1], h, w], dtype=input.dtype, device=DistributedEnv.get_device())
                 if global_rank_of_next is None:
