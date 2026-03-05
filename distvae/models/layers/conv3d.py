@@ -113,8 +113,7 @@ class PatchConv3d(nn.Conv3d):
         if rank == 0:
             padding[-1] = 0  # F_right
         elif rank == world_size - 1:
-            if not causal_f:
-                padding[-2] = 0  # F_left; for causal, last rank keeps F_left so conv has enough context
+            padding[-2] = 0
         else:
             padding[-2:] = [0, 0]
         return tuple(padding)
@@ -222,8 +221,8 @@ class PatchConv3d(nn.Conv3d):
                 if self.pre_conv_padding is not None:
                     conv_res = F.conv3d(input, weight, bias, self.stride,
                                     _triple(0), self.dilation, self.groups)
-                    conv_res = conv_res[:, :, halo_width[0]:halo_width[0] + patch_f, :, :].contiguous()
-                    return conv_res
+#                    conv_res = conv_res[:, :, halo_width[0]:halo_width[0] + patch_f, :, :].contiguous()
+#                    return conv_res
                 if self.padding_mode != 'zeros':
                     conv_res = F.conv3d(F.pad(input, padding, mode=self.padding_mode),
                                     weight, bias, self.stride,
