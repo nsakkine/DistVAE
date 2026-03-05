@@ -63,7 +63,10 @@ class PatchConv3d(nn.Conv3d):
         if rank == DistributedEnv.get_group_world_size() - 1:
             return 0
         nstep_before_bottom = (height_index[rank + 1] + padding - (kernel_size - 1) // 2 + stride - 1) // stride
-        assert nstep_before_bottom > 0, "nstep_before_bottom should be larger than 0"
+        if nstep_before_bottom <= 0:
+            # Patch too small for at least one conv step; use nstep=0 so halo is minimal
+            bottom_halo_width = -stride + kernel_size - padding - height_index[rank + 1]
+            return max(0, bottom_halo_width)
         bottom_halo_width =  (nstep_before_bottom - 1) * stride + kernel_size - padding - height_index[rank + 1]
         return max(0, bottom_halo_width)
 
@@ -76,8 +79,11 @@ class PatchConv3d(nn.Conv3d):
         if rank == 0:
             return 0
         nstep_before_top = (height_index[rank] + padding - (kernel_size - 1) // 2 + stride - 1) // stride
+        if nstep_before_top <= 0:
+            # Patch boundary or tiny patch; no top halo
+            return 0
         top_halo_width = height_index[rank] - (nstep_before_top * stride - padding)
-        return top_halo_width
+        return max(0, top_halo_width)
 
 
     def _calc_halo_width(self, rank, height_index, kernel_size, padding = 0, stride = 1):
