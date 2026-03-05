@@ -7,17 +7,17 @@ from torch.distributed import ProcessGroup
 from torch.profiler import profile, ProfilerActivity
 
 from distvae.models.vae import PatchDecoder
-from distvae.modules.adapters.unets.unet_2d_blocks_adapters import UpDecoderBlock2DAdapter
-from distvae.modules.adapters.layers.norm_adapters import GroupNormAdapter
+from distvae.modules.adapters.layers.attn_adapters import WanAttentionBlockAdapter
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
+from distvae.modules.adapters.layers.norm_adapters import GroupNormAdapter
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
+from distvae.modules.adapters.unets.unet_2d_blocks_adapters import UpDecoderBlock2DAdapter
 from distvae.modules.adapters.upsampling_adapters import WanUpBlockAdapter
 from distvae.modules.patch_utils import Patchify, DePatchify
 from distvae.utils import DistributedEnv
 from diffusers.models.autoencoders.vae import Decoder
 from diffusers.models.unets.unet_2d_blocks import UpDecoderBlock2D
 from diffusers.models.autoencoders.autoencoder_kl_wan import (
-    WanRMS_norm,
     WanMidBlock,
 )
 
@@ -101,6 +101,9 @@ class WanMidBlockAdapter(nn.Module):
         self.mid_block = wan_mid_block
         self.mid_block.resnets = nn.ModuleList([
             WanResidualBlockAdapter(resnet, conv_block_size=conv_block_size) for resnet in wan_mid_block.resnets
+        ])
+        self.mid_block.attentions = nn.ModuleList([
+            WanAttentionBlockAdapter(attn) for attn in wan_mid_block.attentions
         ])
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
