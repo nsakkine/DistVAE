@@ -5,7 +5,7 @@ from distvae.models.resnet import PatchResnetBlock2D
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
 from distvae.modules.adapters.layers.norm_adapters import GroupNormAdapter
 from diffusers.models.resnet import ResnetBlock2D
-from diffusers.models.autoencoders.autoencoder_kl_wan import WanResidualBlock
+from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d, WanResidualBlock
 
 
 class ResnetBlock2DAdapter(nn.Module):
