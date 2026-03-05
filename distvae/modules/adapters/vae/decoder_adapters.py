@@ -117,7 +117,6 @@ class WanDecoderAdapter(nn.Module):
         conv_block_size = 0,
     ):
         super().__init__()
-        assert isinstance(decoder.conv_norm_out, WanRMS_norm), "DecoderAdapter does not support normalization method except WanRMS_norm"
         DistributedEnv.initialize(vae_group)
         self.decoder = decoder
         self.decoder.conv_in = WanCausalConv3dAdapter(decoder.conv_in, block_size=conv_block_size)
@@ -131,17 +130,26 @@ class WanDecoderAdapter(nn.Module):
         self.use_profiler = use_profiler
         self.vae_group = vae_group
 
-    def _forward(self, sample: torch.FloatTensor, latent_embeds: Optional[torch.FloatTensor] = None, patchify: bool = True):
+    def _forward(
+        self,
+        sample: torch.FloatTensor,
+        feat_cache: Optional[torch.FloatTensor] = None,
+        feat_idx: Optional[int] = 0,
+        first_chunk: bool = False,
+        patchify: bool = True
+    ):
         if patchify:
             sample = self.patchify(sample)
-        sample = self.decoder(sample, latent_embeds)
+        sample = self.decoder(sample, feat_cache=feat_cache, feat_idx=feat_idx, first_chunk=first_chunk)
         sample = self.depatchify(sample)
         return sample
 
     def forward(
         self,
         sample: torch.FloatTensor,
-        latent_embeds: Optional[torch.FloatTensor] = None,
+        feat_cache: Optional[torch.FloatTensor] = None,
+        feat_idx: Optional[int] = 0,
+        first_chunk: bool = False,
         patchify: bool = True,
     ):
         rank = DistributedEnv.get_global_rank()
@@ -165,10 +173,10 @@ class WanDecoderAdapter(nn.Module):
                 with_stack=True,
                 record_shapes=True,
             ) as prof:
-                output = self._forward(sample, latent_embeds, patchify)
+                output = self._forward(sample, feat_cache, feat_idx, first_chunk, patchify)
             prof.export_memory_timeline(f"patch_vae_profiler_mem_{rank}.html")
         else:
-            output =  self._forward(sample, latent_embeds, patchify)
+            output =  self._forward(sample, feat_cache, feat_idx, first_chunk, patchify)
 
         end_time = time.time()
         elapsed_time = end_time - start_time
