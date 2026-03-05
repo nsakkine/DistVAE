@@ -5,7 +5,7 @@ from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.modules.utils import _pair, _triple
 
-from torch.nn.common_types import _size_2_t
+from torch.nn.common_types import _size_3_t
 from typing import Optional, List, Tuple, Union
 from distvae.utils import DistributedEnv
 
@@ -14,10 +14,10 @@ class PatchConv3d(nn.Conv3d):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: _size_2_t,
-        stride: _size_2_t = 1,
-        padding: Union[str, _size_2_t] = 0,
-        dilation: _size_2_t = 1,
+        kernel_size: _size_3_t,
+        stride: _size_3_t = 1,
+        padding: Union[str, _size_3_t] = 0,
+        dilation: _size_3_t = 1,
         groups: int = 1,
         bias: bool = True,
         padding_mode: str = 'zeros',  # TODO: refine this type
@@ -140,9 +140,7 @@ class PatchConv3d(nn.Conv3d):
         else:
         # 1. get the meta data of input tensor and conv operation
             patch_f = f  # patch F size before halo; used for crop when pre_conv_padding is set
-            effective_padding_f = 0 if self.pre_conv_padding is not None else (
-                self.padding[0] if isinstance(self.padding, tuple) else self.padding
-            )
+            effective_padding_f = self.padding[0] if isinstance(self.padding, tuple) else self.padding
             patch_height_list = [torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device()) for _ in range(group_world_size)]
             dist.all_gather(patch_height_list, torch.tensor([f], dtype=torch.int64, device=DistributedEnv.get_device()), group=DistributedEnv.get_vae_group())
             patch_height_index = self._calc_patch_index(patch_height_list)
