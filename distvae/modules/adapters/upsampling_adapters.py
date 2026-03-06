@@ -52,6 +52,16 @@ class WanResampleAdapter(nn.Module):
         self.resample = wan_resample
         if hasattr(wan_resample, "time_conv"):
             wan_resample.time_conv = WanCausalConv3dAdapter(wan_resample.time_conv, block_size=conv_block_size)
+        if isinstance(wan_resample.resample, nn.ModuleList):
+            resample = []
+            for layer in wan_resample.resample:
+                if isinstance(layer, nn.Conv2d):
+                    resample.append(Conv2dAdapter(layer, block_size=conv_block_size))
+                else:
+                    resample.append(layer)
+            self.resample.resample = nn.ModuleList(resample)
+        else:
+            self.resample.resample = wan_resample.resample
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         return self.resample(x, feat_cache=feat_cache, feat_idx=feat_idx)
