@@ -213,18 +213,17 @@ class PatchConv3d(nn.Conv3d):
                     ):
                         conv_res = F.conv3d(input, weight, bias, self.stride,
                                             self.padding, self.dilation, self.groups)
-                        crop_slice = [slice(None)] * 5
-                        if halo_width[1] == 0:
-                            crop_slice[patch_dim] = slice(halo_width[0], None)
-                        else:
-                            crop_slice[patch_dim] = slice(halo_width[0], -halo_width[1])
-                        return conv_res[tuple(crop_slice)].contiguous()
-
                     else:
                         conv_res = F.conv3d(F.pad(input, padding, "constant", 0.0),
                                             weight, bias, self.stride,
                                             _triple(0), self.dilation, self.groups)
-                        return conv_res
+                    crop_slice = [slice(None)] * 5
+                    if halo_width[1] == 0:
+                        crop_slice[patch_dim] = slice(halo_width[0], None)
+                    else:
+                        crop_slice[patch_dim] = slice(halo_width[0], -halo_width[1])
+                    return conv_res[tuple(crop_slice)].contiguous()
+
 
 
             else:

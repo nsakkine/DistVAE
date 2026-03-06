@@ -220,17 +220,17 @@ class PatchConv2d(nn.Conv2d):
                     if self.stride[spatial_idx] == 1 and self.padding[spatial_idx] == 1 and k == 3:
                         conv_res = F.conv2d(input, weight, bias, self.stride,
                                     self.padding, self.dilation, self.groups)
-                        crop_slice = 5 * [slice(None),]
-                        if halo_width[1] == 0:
-                            crop_slice[d] = slice(halo_width[0], None)
-                        else:
-                            crop_slice[d] = slice(halo_width[0], -halo_width[1])
-                        return conv_res[tuple(crop_slice)].contiguous()
                     else:
                         conv_res = F.conv2d(F.pad(input, padding, "constant", 0.0),
                                         weight, bias, self.stride,
                                         _pair(0), self.dilation, self.groups)
-                        return conv_res
+                    crop_slice = 5 * [slice(None),]
+                    if halo_width[1] == 0:
+                        crop_slice[d] = slice(halo_width[0], None)
+                    else:
+                        crop_slice[d] = slice(halo_width[0], -halo_width[1])
+                    return conv_res[tuple(crop_slice)].contiguous()
+
 
         # 3.1. if block_size is not 0, split patch to block and do convolution to 
                 # reduce memory spike
