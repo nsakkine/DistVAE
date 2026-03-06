@@ -131,7 +131,7 @@ class PatchConv2d(nn.Conv2d):
             
         else:
         # 1. get the meta data of input tensor and conv operation
-            d = self.patch_dim if self.patch_dim >= 0 else 4 + self.patch_dim
+            d = self.patch_dim if self.patch_dim >= 0 else input.ndim + self.patch_dim
             patch_size = input.shape[d]
             spatial_idx = d - 2
             k = self.kernel_size[spatial_idx] if isinstance(self.kernel_size, tuple) else self.kernel_size
@@ -220,7 +220,7 @@ class PatchConv2d(nn.Conv2d):
                     if self.stride[spatial_idx] == 1 and self.padding[spatial_idx] == 1 and k == 3:
                         conv_res = F.conv2d(input, weight, bias, self.stride,
                                     self.padding, self.dilation, self.groups)
-                        crop_slice = [slice(None), slice(None), slice(None), slice(None)]
+                        crop_slice = 5 * [slice(None),]
                         if halo_width[1] == 0:
                             crop_slice[d] = slice(halo_width[0], None)
                         else:
@@ -230,9 +230,7 @@ class PatchConv2d(nn.Conv2d):
                         conv_res = F.conv2d(F.pad(input, padding, "constant", 0.0),
                                         weight, bias, self.stride,
                                         _pair(0), self.dilation, self.groups)
-                        crop_slice = [slice(None), slice(None), slice(None), slice(None)]
-                        crop_slice[d] = slice(halo_width[0], halo_width[0] + patch_size)
-                        return conv_res[tuple(crop_slice)].contiguous()
+                        return conv_res
 
         # 3.1. if block_size is not 0, split patch to block and do convolution to 
                 # reduce memory spike
