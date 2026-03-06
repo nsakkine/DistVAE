@@ -81,13 +81,14 @@ class WanCausalConv3dAdapter(nn.Module):
         block_size = 0,
     ):
         super().__init__()
+        assert isinstance(causal_conv3d, WanCausalConv3d), "WanCausalConv3dAdapter does not support causal_conv3d except WanCausalConv3d"
         # Causal padding is applied in this adapter's forward (F.pad); PatchConv3d is called with padding=(0,0,0).
         self.conv3d = PatchConv3d(
             in_channels=causal_conv3d.in_channels,
             out_channels=causal_conv3d.out_channels,
             kernel_size=causal_conv3d.kernel_size,
             stride=causal_conv3d.stride,
-            padding=(0, 0, 0),
+            padding=causal_conv3d.padding,
             dilation=causal_conv3d.dilation,
             groups=causal_conv3d.groups,
             bias=causal_conv3d.bias is not None,
@@ -99,17 +100,7 @@ class WanCausalConv3dAdapter(nn.Module):
         self.conv3d.weight.data = causal_conv3d.weight.data
         if causal_conv3d.bias is not None:
             self.conv3d.bias.data = causal_conv3d.bias.data
-        padding = causal_conv3d.padding
-        if isinstance(padding, int):
-            padding = (padding, padding, padding)
-        self._padding = (
-            padding[2],
-            padding[2],
-            padding[1],
-            padding[1],
-            2 * padding[0],
-            0
-        )
+        self._padding = causal_conv3d._padding
 
     def forward(self, x, cache_x=None):
         padding = list(self._padding)
