@@ -223,9 +223,6 @@ class PatchConv3d(nn.Conv3d):
                     else:
                         crop_slice[patch_dim] = slice(halo_width[0], -halo_width[1])
                     return conv_res[tuple(crop_slice)].contiguous()
-
-
-
             else:
                 if self.padding_mode != "zeros":
                     input = F.pad(input, padding, mode=self.padding_mode)
