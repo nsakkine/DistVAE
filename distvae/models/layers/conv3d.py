@@ -206,24 +206,23 @@ class PatchConv3d(nn.Conv3d):
                                         weight, bias, self.stride,
                                         _triple(0), self.dilation, self.groups)
                 else:
-                    all_one = (self.stride[0] == 1 and self.stride[1] == 1 and self.stride[2] == 1 and
+                    on_fast_path = (self.stride[0] == 1 and self.stride[1] == 1 and self.stride[2] == 1 and
                               self.padding[0] == 1 and self.padding[1] == 1 and self.padding[2] == 1 and
                               self.kernel_size[0] == 3 and self.kernel_size[1] == 3 and self.kernel_size[2] == 3)
-                    if all_one:
+                    if on_fast_path:
                         conv_res = F.conv3d(input, weight, bias, self.stride,
                                             self.padding, self.dilation, self.groups)
-                        if halo_width[1] == 0:
-                            crop_slice[patch_dim] = slice(halo_width[0], None)
-                        else:
-                            crop_slice[patch_dim] = slice(halo_width[0], -halo_width[1])
-                        return conv_res[tuple(crop_slice)].contiguous()
                     else:
                         conv_res = F.conv3d(F.pad(input, padding, "constant", 0.0),
                                             weight, bias, self.stride,
                                             _triple(0), self.dilation, self.groups)
-                        crop_slice = [slice(None), slice(None), slice(None), slice(None)]
-                        crop_slice[patch_dim] = slice(halo_width[0], halo_width[0] + patch_size)
-                        return conv_res[tuple(crop_slice)].contiguous()
+                    crop_slice = [slice(None)] * 5
+                    if halo_width[1] == 0:
+                        crop_slice[patch_dim] = slice(halo_width[0], None)
+                    else:
+                        crop_slice[patch_dim] = slice(halo_width[0], -halo_width[1])
+                    return conv_res[tuple(crop_slice)].contiguous()
+
 
             else:
                 if self.padding_mode != "zeros":
