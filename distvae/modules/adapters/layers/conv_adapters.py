@@ -81,7 +81,7 @@ class WanCausalConv3dAdapter(nn.Module):
         block_size = 0,
     ):
         super().__init__()
-        # Causal padding is applied inside PatchConv3d via pre_conv_padding; use padding=0.
+        # Causal padding is applied in this adapter's forward (F.pad); PatchConv3d is called with padding=(0,0,0).
         self.conv3d = PatchConv3d(
             in_channels=causal_conv3d.in_channels,
             out_channels=causal_conv3d.out_channels,
@@ -95,7 +95,6 @@ class WanCausalConv3dAdapter(nn.Module):
             device=causal_conv3d.weight.device,
             dtype=causal_conv3d.weight.dtype,
             block_size=block_size,
-            pre_conv_padding=tuple(0 for _ in range(6)),
         )
         self.conv3d.weight.data = causal_conv3d.weight.data
         if causal_conv3d.bias is not None:
