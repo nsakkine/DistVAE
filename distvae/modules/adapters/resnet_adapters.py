@@ -56,6 +56,8 @@ class WanResidualBlockAdapter(nn.Module):
         self.residual_block = wan_residual_block
         self.residual_block.conv1 = WanCausalConv3dAdapter(wan_residual_block.conv1, block_size=conv_block_size)
         self.residual_block.conv2 = WanCausalConv3dAdapter(wan_residual_block.conv2, block_size=conv_block_size)
+        if isinstance(wan_residual_block.conv_shortcut, WanCausalConv3d):
+            self.residual_block.conv_shortcut = WanCausalConv3dAdapter(wan_residual_block.conv_shortcut, block_size=conv_block_size)
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         return self.residual_block(x, feat_cache=feat_cache, feat_idx=feat_idx)
