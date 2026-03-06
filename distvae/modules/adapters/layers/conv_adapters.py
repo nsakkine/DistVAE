@@ -95,7 +95,7 @@ class WanCausalConv3dAdapter(nn.Module):
             device=causal_conv3d.weight.device,
             dtype=causal_conv3d.weight.dtype,
             block_size=block_size,
-            pre_conv_padding=0,
+            pre_conv_padding=tuple(0 for _ in range(6)),
         )
         self.conv3d.weight.data = causal_conv3d.weight.data
         if causal_conv3d.bias is not None:
