@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d
 from distvae.models.layers.conv2d import PatchConv2d
@@ -86,7 +87,7 @@ class WanCausalConv3dAdapter(nn.Module):
             out_channels=causal_conv3d.out_channels,
             kernel_size=causal_conv3d.kernel_size,
             stride=causal_conv3d.stride,
-            padding=causal_conv3d.padding,
+            padding=(0, 0, 0),
             dilation=causal_conv3d.dilation,
             groups=causal_conv3d.groups,
             bias=causal_conv3d.bias is not None,
@@ -94,11 +95,28 @@ class WanCausalConv3dAdapter(nn.Module):
             device=causal_conv3d.weight.device,
             dtype=causal_conv3d.weight.dtype,
             block_size=block_size,
-            pre_conv_padding=causal_conv3d._padding,
+            pre_conv_padding=0,
         )
         self.conv3d.weight.data = causal_conv3d.weight.data
         if causal_conv3d.bias is not None:
             self.conv3d.bias.data = causal_conv3d.bias.data
+        padding = causal_conv3d.padding
+        if isinstance(padding, int):
+            padding = (padding, padding, padding)
+        self._padding = (
+            padding[2],
+            padding[2],
+            padding[1],
+            padding[1],
+            2 * padding[0],
+            0
+        )
 
-    def forward(self, x):
+    def forward(self, x, cache_x=None):
+        padding = list(self._padding)
+        if cache_x is not None and self._padding[4] > 0:
+            cache_x = cache_x.to(x.device)
+            x = torch.cat([cache_x, x], dim=2)
+            padding[4] -= cache_x.shape[2]
+        x = F.pad(x, padding)
         return self.conv3d(x)
