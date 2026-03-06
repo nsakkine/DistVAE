@@ -12,7 +12,7 @@ class DistributedEnv:
     _vae_group = None
     _local_rank = None
     _world_size = None  # 添加新的类变量
-    _patch_dim = 2  # spatial dim to split across ranks: 2=F, 3=H, 4=W for 5D
+    _patch_dim = -2  # -3=F, -2=H, -1=W; same for 2D/3D
 
     @classmethod
     def initialize(cls, vae_group: ProcessGroup):

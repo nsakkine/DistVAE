@@ -3,6 +3,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from distvae.utils import DistributedEnv
 from distvae.models.upsampling import PatchUpsample2D
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
@@ -50,13 +51,16 @@ class WanResampleAdapter(nn.Module):
         super().__init__()
         assert isinstance(wan_resample, WanResample), "WanResampleAdapter does not support resample except WanResample"
         self.resample = wan_resample
+        patch_dim = DistributedEnv.get_patch_dim()
+        if patch_dim == -3:
+            raise ValueError("WanResampleAdapter does not support patch_dim F (-3); use H (-2) or W (-1).")
         if hasattr(wan_resample, "time_conv"):
             wan_resample.time_conv = WanCausalConv3dAdapter(wan_resample.time_conv, block_size=conv_block_size)
         if isinstance(wan_resample.resample, nn.ModuleList):
             resample = []
             for layer in wan_resample.resample:
                 if isinstance(layer, nn.Conv2d):
-                    resample.append(Conv2dAdapter(layer, block_size=conv_block_size))
+                    resample.append(Conv2dAdapter(layer, block_size=conv_block_size, patch_dim=patch_dim))
                 else:
                     resample.append(layer)
             self.resample.resample = nn.ModuleList(resample)

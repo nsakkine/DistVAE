@@ -12,6 +12,7 @@ class Conv2dAdapter(nn.Module):
         conv2d: nn.Conv2d,
         *,
         block_size = 0,
+        patch_dim: int = -2,
     ):
         super().__init__()
         for i in conv2d.dilation:
@@ -29,9 +30,11 @@ class Conv2dAdapter(nn.Module):
             device=conv2d.weight.device,
             dtype=conv2d.weight.dtype,
             block_size=block_size,
+            patch_dim=patch_dim,
         )
         self.conv2d.weight.data = conv2d.weight.data
-        self.conv2d.bias.data = conv2d.bias.data
+        if conv2d.bias is not None:
+            self.conv2d.bias.data = conv2d.bias.data
 
     def forward(self, x):
         return self.conv2d(x)
@@ -62,7 +65,8 @@ class Conv3dAdapter(nn.Module):
             block_size=block_size,
         )
         self.conv3d.weight.data = conv3d.weight.data
-        self.conv3d.bias.data = conv3d.bias.data
+        if conv3d.bias is not None:
+            self.conv3d.bias.data = conv3d.bias.data
 
     def forward(self, x):
         return self.conv3d(x)
@@ -93,8 +97,8 @@ class WanCausalConv3dAdapter(nn.Module):
             pre_conv_padding=causal_conv3d._padding,
         )
         self.conv3d.weight.data = causal_conv3d.weight.data
-        self.conv3d.bias.data = causal_conv3d.bias.data
+        if causal_conv3d.bias is not None:
+            self.conv3d.bias.data = causal_conv3d.bias.data
 
-    def forward(self, x, cache_x=None):
-        # Cache not supported; causal padding is handled inside PatchConv3d.
+    def forward(self, x):
         return self.conv3d(x)

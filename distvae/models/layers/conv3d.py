@@ -145,6 +145,7 @@ class PatchConv3d(nn.Conv3d):
             
         else:
             patch_dim = DistributedEnv.get_patch_dim()
+            patch_dim = patch_dim if patch_dim >= 0 else input.ndim + patch_dim
             if patch_dim == 2:
         # 1. get the meta data of input tensor and conv operation (patch along F)
                 patch_f = f  # patch F size before halo; used for crop when pre_conv_padding is set

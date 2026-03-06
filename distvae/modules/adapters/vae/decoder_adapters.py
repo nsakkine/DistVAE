@@ -118,9 +118,11 @@ class WanDecoderAdapter(nn.Module):
         *,
         use_profiler: bool = False,
         conv_block_size = 0,
-        patch_dim: int = 3,
+        patch_dim: int = -2,
     ):
         super().__init__()
+        if patch_dim == -3:
+            raise ValueError("WanDecoderAdapter does not support patch_dim F (-3); use H (-2) or W (-1).")
         DistributedEnv.initialize(vae_group)
         self.patch_dim = patch_dim
         DistributedEnv.set_patch_dim(patch_dim)

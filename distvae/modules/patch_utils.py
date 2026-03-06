@@ -13,7 +13,7 @@ class Patchify(nn.Module):
         self.patch_dim = DistributedEnv.get_patch_dim()
 
     def forward(self, hidden_state):
-        d = self.patch_dim
+        d = self.patch_dim if self.patch_dim >= 0 else hidden_state.ndim + self.patch_dim
         chunks = torch.chunk(hidden_state, self.group_world_size, dim=d)
         return chunks[self.rank_in_vae_group].clone()
 
@@ -27,7 +27,7 @@ class DePatchify(nn.Module):
         self.patch_dim = DistributedEnv.get_patch_dim()
 
     def forward(self, patch_hidden_state):
-        d = self.patch_dim
+        d = self.patch_dim if self.patch_dim >= 0 else patch_hidden_state.ndim + self.patch_dim
         patch_size_list = [torch.empty([1], dtype=torch.int64, device=DistributedEnv.get_device()) for _ in range(self.group_world_size)]
         dist.all_gather(
             patch_size_list,
