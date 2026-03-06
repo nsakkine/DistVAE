@@ -326,7 +326,6 @@ class PatchDecoder(nn.Module):
                     use_reentrant=False,
                 )
                 sample = sample.to(upscale_dtype)
-                height_before_patch = sample.shape[2]
                 sample = self.patch(sample)
                 # up
                 for up_block in self.up_blocks:
@@ -342,7 +341,6 @@ class PatchDecoder(nn.Module):
                     create_custom_forward(self.mid_block), sample, latent_embeds
                 )
                 sample = sample.to(upscale_dtype)
-                height_before_patch = sample.shape[2]
                 sample = self.patch(sample)
                 # up
                 for up_block in self.up_blocks:
@@ -351,7 +349,6 @@ class PatchDecoder(nn.Module):
             # middle
             sample = self.mid_block(sample, latent_embeds)
             sample = sample.to(upscale_dtype)
-            height_before_patch = sample.shape[2]
             # up
             sample = self.patch(sample)
             for up_block in self.up_blocks:
@@ -364,7 +361,7 @@ class PatchDecoder(nn.Module):
             sample = self.conv_norm_out(sample, latent_embeds)
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
-        sample = self.depatch(sample, original_length=height_before_patch)
+        sample = self.depatch(sample)
 
         return sample
 

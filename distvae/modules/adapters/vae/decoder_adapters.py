@@ -145,12 +145,9 @@ class WanDecoderAdapter(nn.Module):
         patchify: bool = True
     ):
         if patchify:
-            original_length = sample.shape[self.patch_dim]
             sample = self.patchify(sample)
-        else:
-            original_length = None
         sample = self.decoder(sample, feat_cache=feat_cache, feat_idx=feat_idx, first_chunk=first_chunk)
-        sample = self.depatchify(sample, original_length=original_length)
+        sample = self.depatchify(sample)
         return sample
 
     def forward(
