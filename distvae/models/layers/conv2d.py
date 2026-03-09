@@ -48,7 +48,7 @@ class PatchConv2d(nn.Conv2d):
         local_rank = DistributedEnv.get_local_rank()
         return group_world_size, global_rank, rank_in_group, local_rank
 
-    def _calc_patch_height_index(self, patch_height_list: List[Tensor]):
+    def _calc_patch_index(self, patch_height_list: List[Tensor]):
         height_index = []
         cur = 0
         for t in patch_height_list:
@@ -83,7 +83,7 @@ class PatchConv2d(nn.Conv2d):
         return top_halo_width
 
 
-    def _calc_halo_width_in_h_dim(self, rank, height_index, kernel_size, padding = 0, stride = 1):
+    def _calc_halo_width(self, rank, height_index, kernel_size, padding = 0, stride = 1):
         '''
             Calculate the width of halo region in height dimension.
             The halo region is the region that is used for convolution but not included in the output.
@@ -158,8 +158,8 @@ class PatchConv2d(nn.Conv2d):
                 torch.tensor([patch_size], dtype=torch.int64, device=DistributedEnv.get_device()),
                 group=DistributedEnv.get_vae_group()
             )
-            patch_height_index = self._calc_patch_height_index(patch_height_list)
-            halo_width = self._calc_halo_width_in_h_dim(
+            patch_height_index = self._calc_patch_index(patch_height_list)
+            halo_width = self._calc_halo_width(
                 rank_in_group,
                 patch_height_index,
                 kernel_size_patch_dim,
@@ -372,7 +372,17 @@ class PatchConv2d(nn.Conv2d):
                             )
                         )
                     outputs.append(torch.cat(inner_output, dim=-1))
-                out = torch.cat(outputs, dim=-2)
-                crop_slice = 4 * [slice(None)]
-                crop_slice[patch_dim] = slice(halo_width[0], halo_width[0] + patch_size)
-                return out[tuple(crop_slice)].contiguous()
+                outputs = torch.cat(outputs, dim=-2)
+                if outputs.shape[patch_dim] == patch_size:
+                    crop_slice = (
+                        (slice(None),) * patch_dim +
+                        (slice(0, patch_size),) +
+                        (slice(None),) * (3 - patch_dim)
+                    )
+                else:
+                    crop_slice = (
+                        (slice(None),) * patch_dim +
+                        (slice(halo_width[0], halo_width[0] + patch_size),) +
+                        (slice(None),) * (3 - patch_dim)
+                    )
+                return outputs[tuple(crop_slice)].contiguous()

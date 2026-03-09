@@ -80,7 +80,7 @@ class PatchConv3d(nn.Conv3d):
             return 0
         nstep_before_top = (height_index[rank] + padding - (kernel_size - 1) // 2 + stride - 1) // stride
         top_halo_width = height_index[rank] - (nstep_before_top * stride - padding)
-        return max(0, top_halo_width)
+        return top_halo_width
 
     def _calc_halo_width(self, rank, height_index, kernel_size, padding = 0, stride = 1):
         '''
@@ -266,7 +266,7 @@ class PatchConv3d(nn.Conv3d):
                 world_size=group_world_size,
                 patch_dim=patch_dim
             )
-            bs, channels, h, w = input.shape
+            bs, channels, f, h, w = input.shape
             if (
                 self.block_size == 0 or
                 (
@@ -375,10 +375,17 @@ class PatchConv3d(nn.Conv3d):
                             )
                         outer_output.append(torch.cat(inner_output, dim=-1))
                     outputs.append(torch.cat(outer_output, dim=-2))
-                out = torch.cat(outputs, dim=-3)
-                out_len = out.shape[patch_dim]
-                if out_len == patch_size:
-                    slice_out = (slice(None),) * patch_dim + (slice(0, patch_size),) + (slice(None),) * (4 - patch_dim)
+                outputs = torch.cat(outputs, dim=-3)
+                if outputs.shape[patch_dim] == patch_size:
+                    crop_slice = (
+                        (slice(None),) * patch_dim +
+                        (slice(0, patch_size),) +
+                        (slice(None),) * (4 - patch_dim)
+                    )
                 else:
-                    slice_out = (slice(None),) * patch_dim + (slice(halo_width[0], halo_width[0] + patch_size),) + (slice(None),) * (4 - patch_dim)
-                return out[slice_out].contiguous()
+                    crop_slice = (
+                        (slice(None),) * patch_dim +
+                        (slice(halo_width[0], halo_width[0] + patch_size),) +
+                        (slice(None),) * (4 - patch_dim)
+                    )
+                return outputs[tuple(crop_slice)].contiguous()
