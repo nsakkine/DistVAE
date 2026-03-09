@@ -94,7 +94,7 @@ class WanCausalConv3dAdapter(nn.Module):
             out_channels=causal_conv3d.out_channels,
             kernel_size=causal_conv3d.kernel_size,
             stride=causal_conv3d.stride,
-            padding=(0, causal_conv3d.padding[2], causal_conv3d.padding[0]),
+            padding=(0, causal_conv3d._padding[2], causal_conv3d._padding[0]),
             dilation=causal_conv3d.dilation,
             groups=causal_conv3d.groups,
             bias=causal_conv3d.bias is not None,
