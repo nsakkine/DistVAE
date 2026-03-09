@@ -11,7 +11,6 @@ class WanAttentionBlockAdapter(torch.nn.Module):
     """Runs attention on the full sequence by gathering along the patch dim, then narrows back to the local patch.
 
     Supports unequal patch sizes across ranks (e.g. after Patchify without padding).
-    Uses DistributedEnv.get_patch_dim() when chunk_dim is not provided.
     """
 
     def __init__(
