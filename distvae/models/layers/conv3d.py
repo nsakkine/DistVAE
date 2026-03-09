@@ -66,6 +66,7 @@ class PatchConv3d(nn.Conv3d):
         if rank == DistributedEnv.get_group_world_size() - 1:
             return 0
         nstep_before_bottom = (height_index[rank + 1] + padding - (kernel_size - 1) // 2 + stride - 1) // stride
+        assert nstep_before_bottom > 0, "nstep_before_bottom should be larger than 0"
         bottom_halo_width =  (nstep_before_bottom - 1) * stride + kernel_size - padding - height_index[rank + 1]
         return max(0, bottom_halo_width)
 

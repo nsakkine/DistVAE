@@ -47,6 +47,7 @@ class Conv3dAdapter(nn.Module):
         conv3d: nn.Conv3d,
         *,
         block_size = 0,
+        patch_dim: int = -2,
     ):
         super().__init__()
         for i in conv3d.dilation:
@@ -64,6 +65,7 @@ class Conv3dAdapter(nn.Module):
             device=conv3d.weight.device,
             dtype=conv3d.weight.dtype,
             block_size=block_size,
+            patch_dim=patch_dim,
         )
         self.conv3d.weight.data = conv3d.weight.data
         if conv3d.bias is not None:
@@ -79,16 +81,20 @@ class WanCausalConv3dAdapter(nn.Module):
         causal_conv3d: WanCausalConv3d,
         *,
         block_size = 0,
+        patch_dim: int = -2,
     ):
         super().__init__()
-        assert isinstance(causal_conv3d, WanCausalConv3d), "WanCausalConv3dAdapter does not support causal_conv3d except WanCausalConv3d"
-        # Causal padding is applied in this adapter's forward (F.pad); PatchConv3d is called with padding=(0,0,0).
+        for i in causal_conv3d.dilation:
+            assert i == 1, "dilation is not supported in WanCausalConv3dAdapter"
+        assert isinstance(causal_conv3d, WanCausalConv3d), (
+            "WanCausalConv3dAdapter does not support causal_conv3d except WanCausalConv3d"
+        )
         self.conv3d = PatchConv3d(
             in_channels=causal_conv3d.in_channels,
             out_channels=causal_conv3d.out_channels,
             kernel_size=causal_conv3d.kernel_size,
             stride=causal_conv3d.stride,
-            padding=causal_conv3d.padding,
+            padding=(0, causal_conv3d.padding[2], causal_conv3d.padding[0]),
             dilation=causal_conv3d.dilation,
             groups=causal_conv3d.groups,
             bias=causal_conv3d.bias is not None,
@@ -96,11 +102,12 @@ class WanCausalConv3dAdapter(nn.Module):
             device=causal_conv3d.weight.device,
             dtype=causal_conv3d.weight.dtype,
             block_size=block_size,
+            patch_dim=patch_dim,
         )
         self.conv3d.weight.data = causal_conv3d.weight.data
         if causal_conv3d.bias is not None:
             self.conv3d.bias.data = causal_conv3d.bias.data
-        self._padding = causal_conv3d._padding
+        self._padding = (0, 0, 0, 0, causal_conv3d._padding[4], causal_conv3d._padding[5])
 
     def forward(self, x, cache_x=None):
         padding = list(self._padding)
