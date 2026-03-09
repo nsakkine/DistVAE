@@ -281,9 +281,9 @@ class PatchConv3d(nn.Conv3d):
                                         _triple(0), self.dilation, self.groups)
                 else:
                     if (
-                        self.stride[spatial_idx] == 1 and
-                        self.padding[spatial_idx] == 1 and
-                        self.kernel_size[spatial_idx] == 3
+                        stride_patch_dim == 1 and
+                        padding_patch_dim == 1 and
+                        kernel_size_patch_dim == 3
                     ):
                         conv_res = F.conv3d(input, weight, bias, self.stride,
                                             self.padding, self.dilation, self.groups)
