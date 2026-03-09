@@ -64,7 +64,7 @@ class WanResampleAdapter(nn.Module):
             wan_resample.time_conv = WanCausalConv3dAdapter(
                 wan_resample.time_conv, block_size=conv_block_size, patch_dim=patch_dim
         )
-        if isinstance(wan_resample.resample, nn.ModuleList):
+        if isinstance(wan_resample.resample, nn.Sequential):
             resample = []
             for layer in wan_resample.resample:
                 if isinstance(layer, nn.Conv2d):
@@ -73,7 +73,7 @@ class WanResampleAdapter(nn.Module):
                     )
                 else:
                     resample.append(layer)
-            self.resample.resample = nn.ModuleList(resample)
+            self.resample.resample = nn.Sequential(*resample)
         else:
             self.resample.resample = wan_resample.resample
 
