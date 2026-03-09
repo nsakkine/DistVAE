@@ -32,13 +32,15 @@ class PatchConv2d(nn.Conv2d):
         else:
             for i in dilation:
                 assert i == 1, "dilation is not supported in PatchConv2d"
-        assert patch_dim in (-2, -1, 2, 3), "PatchConv2d patch_dim must be H (-2 or 2) or W (-1 or 3)"
+        assert patch_dim in (-2, -1, 2, 3), (
+            "PatchConv2d patch_dim must be H (-2 or 2) or W (-1 or 3)"
+        )
         self.block_size = block_size
         self.patch_dim = patch_dim
         super().__init__(
-            in_channels, out_channels, kernel_size, stride, padding, dilation, 
+            in_channels, out_channels, kernel_size, stride, padding, dilation,
             groups, bias, padding_mode, device, dtype)
-        
+
     def _get_world_size_and_rank(self):
         group_world_size = DistributedEnv.get_group_world_size()
         global_rank = DistributedEnv.get_global_rank()
@@ -82,8 +84,8 @@ class PatchConv2d(nn.Conv2d):
 
 
     def _calc_halo_width_in_h_dim(self, rank, height_index, kernel_size, padding = 0, stride = 1):
-        ''' 
-            Calculate the width of halo region in height dimension. 
+        '''
+            Calculate the width of halo region in height dimension.
             The halo region is the region that is used for convolution but not included in the output.
             return value: (top_halo_width, bottom_halo_width)
         '''
@@ -96,7 +98,7 @@ class PatchConv2d(nn.Conv2d):
         elif rank == DistributedEnv.get_group_world_size() - 1:
             halo_width[1] = 0
         return tuple(halo_width)
-        
+
 
     # in 2d case, padding is a tuple of 4 integers: (W_l, W_r, H_l, H_r) for F.pad
     def _adjust_padding_for_patch(self, padding, rank, world_size, patch_dim_d: int = 2):
@@ -128,90 +130,150 @@ class PatchConv2d(nn.Conv2d):
                                 _pair(0), self.dilation, self.groups)
             return F.conv2d(input, weight, bias, self.stride,
                             self.padding, self.dilation, self.groups)
-            
+
         else:
-        # 1. get the meta data of input tensor and conv operation
-            d = self.patch_dim if self.patch_dim >= 0 else input.ndim + self.patch_dim
-            patch_size = input.shape[d]
-            spatial_idx = d - 2
-            k = self.kernel_size[spatial_idx] if isinstance(self.kernel_size, tuple) else self.kernel_size
-            p = self.padding[spatial_idx] if isinstance(self.padding, tuple) else self.padding
-            s = self.stride[spatial_idx] if isinstance(self.stride, tuple) else self.stride
-            patch_height_list = [torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device()) for _ in range(group_world_size)]
-            dist.all_gather(patch_height_list, torch.tensor([patch_size], dtype=torch.int64, device=DistributedEnv.get_device()), group=DistributedEnv.get_vae_group())
+            patch_dim = self.patch_dim if self.patch_dim >= 0 else input.ndim + self.patch_dim
+            patch_size = input.shape[patch_dim]
+            spatial_idx = patch_dim - 2
+            kernel_size_patch_dim = (
+                self.kernel_size[spatial_idx]
+                if isinstance(self.kernel_size, tuple) else self.kernel_size
+            )
+            padding_patch_dim = (
+                self.padding[spatial_idx]
+                if isinstance(self.padding, tuple) else self.padding
+            )
+            stride_patch_dim = (
+                self.stride[spatial_idx]
+                if isinstance(self.stride, tuple) else self.stride
+            )
+
+            # 1. get the meta data of input tensor and conv operation
+            patch_height_list = [
+                torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device())
+                for _ in range(group_world_size)
+            ]
+            dist.all_gather(
+                patch_height_list,
+                torch.tensor([patch_size], dtype=torch.int64, device=DistributedEnv.get_device()),
+                group=DistributedEnv.get_vae_group()
+            )
             patch_height_index = self._calc_patch_height_index(patch_height_list)
-            halo_width = self._calc_halo_width_in_h_dim(rank_in_group, patch_height_index, k, p, s)
+            halo_width = self._calc_halo_width_in_h_dim(
+                rank_in_group,
+                patch_height_index,
+                kernel_size_patch_dim,
+                padding_patch_dim,
+                stride_patch_dim
+            )
             prev_bottom_halo_width: int = 0
             next_top_halo_width: int = 0
             if rank_in_group != 0:
-                prev_bottom_halo_width = self._calc_bottom_halo_width(rank_in_group - 1, patch_height_index, k, p, s)
+                prev_bottom_halo_width = self._calc_bottom_halo_width(
+                    rank_in_group - 1,
+                    patch_height_index,
+                    kernel_size_patch_dim,
+                    padding_patch_dim,
+                    stride_patch_dim
+                )
             if rank_in_group != group_world_size - 1:
-                next_top_halo_width = self._calc_top_halo_width(rank_in_group + 1, patch_height_index, k, p, s)
+                next_top_halo_width = self._calc_top_halo_width(
+                    rank_in_group + 1,
+                    patch_height_index,
+                    kernel_size_patch_dim,
+                    padding_patch_dim,
+                    stride_patch_dim
+                )
                 next_top_halo_width = max(0, next_top_halo_width)
+            assert halo_width[0] <= patch_size and halo_width[1] <= patch_size, (
+                "halo width is larger than the patch dimension of input tensor"
+            )
 
-            assert halo_width[0] <= patch_size and halo_width[1] <= patch_size, "halo width is larger than the patch dimension of input tensor"
-
-
-        # 2. get the halo region from other ranks
+            # 2. get the halo region from other ranks
             to_next = None
             to_prev = None
             top_halo_recv = None
             bottom_halo_recv = None
             global_rank_of_next, global_rank_of_prev = None, None
             indices_end = [slice(None)] * 4
-            indices_end[d] = slice(-next_top_halo_width, None)
+            indices_end[patch_dim] = slice(-next_top_halo_width, None)
             indices_start = [slice(None)] * 4
-            indices_start[d] = slice(0, prev_bottom_halo_width)
+            indices_start[patch_dim] = slice(0, prev_bottom_halo_width)
+            # up to down
             if next_top_halo_width > 0:
                 bottom_halo_send = input[tuple(indices_end)].contiguous()
                 global_rank_of_next = DistributedEnv.get_global_rank_from_group_rank(rank_in_group + 1)
-                to_next = dist.isend(bottom_halo_send, global_rank_of_next, group=DistributedEnv.get_vae_group())
-
+                to_next = dist.isend(
+                    bottom_halo_send,
+                    global_rank_of_next,
+                    group=DistributedEnv.get_vae_group()
+                )
             if halo_width[0] > 0:
-                assert patch_height_index[rank_in_group] - halo_width[0] >= patch_height_index[rank_in_group - 1], \
+                assert patch_height_index[rank_in_group] - halo_width[0] >= patch_height_index[rank_in_group - 1], (
                     "width of top halo region is larger than the input tensor of prev rank"
+                )
                 recv_shape = list(input.shape)
-                recv_shape[d] = halo_width[0]
+                recv_shape[patch_dim] = halo_width[0]
                 top_halo_recv = torch.empty(recv_shape, dtype=input.dtype, device=DistributedEnv.get_device())
                 global_rank_of_prev = DistributedEnv.get_global_rank_from_group_rank(rank_in_group - 1)
-                dist.recv(top_halo_recv, global_rank_of_prev, group=DistributedEnv.get_vae_group())
-
+                dist.recv(
+                    top_halo_recv,
+                    global_rank_of_prev,
+                    group=DistributedEnv.get_vae_group()
+                )
+            # down to up
             if prev_bottom_halo_width > 0:
                 top_halo_send = input[tuple(indices_start)].contiguous()
                 if global_rank_of_prev is None:
                     global_rank_of_prev = DistributedEnv.get_global_rank_from_group_rank(rank_in_group - 1)
-                to_prev = dist.isend(top_halo_send, global_rank_of_prev, group=DistributedEnv.get_vae_group())
-
+                to_prev = dist.isend(
+                    top_halo_send,
+                    global_rank_of_prev,
+                    group=DistributedEnv.get_vae_group()
+                )
             if halo_width[1] > 0:
-                assert patch_height_index[rank_in_group + 1] + halo_width[1] <= patch_height_index[rank_in_group + 2], \
+                assert patch_height_index[rank_in_group + 1] + halo_width[1] <= patch_height_index[rank_in_group + 2], (
                     "width of bottom halo region is larger than the input tensor of next rank"
+                )
                 recv_shape = list(input.shape)
-                recv_shape[d] = halo_width[1]
+                recv_shape[patch_dim] = halo_width[1]
                 bottom_halo_recv = torch.empty(recv_shape, dtype=input.dtype, device=DistributedEnv.get_device())
                 if global_rank_of_next is None:
                     global_rank_of_next = DistributedEnv.get_global_rank_from_group_rank(rank_in_group + 1)
-                dist.recv(bottom_halo_recv, global_rank_of_next, group=DistributedEnv.get_vae_group())
-
+                dist.recv(
+                    bottom_halo_recv,
+                    global_rank_of_next,
+                    group=DistributedEnv.get_vae_group()
+                )
+            # Remove redundancy at the top of the input
             if halo_width[0] < 0:
-                neg_slice = [slice(None)] * 4
-                neg_slice[d] = slice(-halo_width[0], None)
-                input = input[tuple(neg_slice)]
+                trim_slice = [slice(None)] * 4
+                trim_slice[patch_dim] = slice(-halo_width[0], None)
+                input = input[tuple(trim_slice)]
+            # concat the halo region to the input tensor
             if top_halo_recv is not None:
-                input = torch.cat([top_halo_recv, input], dim=d)
+                input = torch.cat([top_halo_recv, input], dim=patch_dim)
             if bottom_halo_recv is not None:
-                input = torch.cat([input, bottom_halo_recv], dim=d)
-            
-        # wait for the communication to finish
+                input = torch.cat([input, bottom_halo_recv], dim=patch_dim)
+            # wait for the communication to finish
             if to_next is not None:
                 to_next.wait()
             if to_prev is not None:
                 to_prev.wait()
 
-        # 3. do convolution and postprocess
+            # 3. do convolution and postprocess
             conv_res: Tensor
-            padding = self._adjust_padding_for_patch(self._reversed_padding_repeated_twice, rank=rank_in_group, world_size=group_world_size, patch_dim_d=d)
+            padding = self._adjust_padding_for_patch(
+                self._reversed_padding_repeated_twice,
+                rank=rank_in_group,
+                world_size=group_world_size,
+                patch_dim_d=patch_dim
+            )
             bs, channels, h, w = input.shape
-            if self.block_size == 0 or (h <= self.block_size and w <= self.block_size):
+            if self.block_size == 0 or (
+                    (h <= self.block_size) if isinstance(self.block_size, int) else (h <= self.block_size[0]) and
+                    (w <= self.block_size) if isinstance(self.block_size, int) else (w <= self.block_size[1])
+            ):
                 if self.padding_mode != 'zeros':
                     conv_res = F.conv2d(F.pad(input, padding, mode=self.padding_mode),
                                     weight, bias, self.stride,
@@ -224,18 +286,17 @@ class PatchConv2d(nn.Conv2d):
                     ):
                         conv_res = F.conv2d(input, weight, bias, self.stride,
                                     self.padding, self.dilation, self.groups)
+                        crop_slice = 4 * [slice(None),]
+                        if halo_width[1] == 0:
+                            crop_slice[patch_dim] = slice(halo_width[0], None)
+                        else:
+                            crop_slice[patch_dim] = slice(halo_width[0], -halo_width[1])
+                        conv_res = conv_res[tuple(crop_slice)].contiguous()
                     else:
                         conv_res = F.conv2d(F.pad(input, padding, "constant", 0.0),
                                         weight, bias, self.stride,
                                         _pair(0), self.dilation, self.groups)
-                    crop_slice = 4 * [slice(None),]
-                    if halo_width[1] == 0:
-                        crop_slice[d] = slice(halo_width[0], None)
-                    else:
-                        crop_slice[d] = slice(halo_width[0], -halo_width[1])
-                    return conv_res[tuple(crop_slice)].contiguous()
-        # 3.1. if block_size is not 0, split patch to block and do convolution to 
-                # reduce memory spike
+                return conv_res
             else:
                 if self.padding_mode != "zeros":
                     input = F.pad(input, padding, mode=self.padding_mode)
@@ -312,6 +373,6 @@ class PatchConv2d(nn.Conv2d):
                         )
                     outputs.append(torch.cat(inner_output, dim=-1))
                 out = torch.cat(outputs, dim=-2)
-                crop_slice = [slice(None), slice(None), slice(None), slice(None)]
-                crop_slice[d] = slice(halo_width[0], halo_width[0] + patch_size)
+                crop_slice = 4 * [slice(None)]
+                crop_slice[patch_dim] = slice(halo_width[0], halo_width[0] + patch_size)
                 return out[tuple(crop_slice)].contiguous()
