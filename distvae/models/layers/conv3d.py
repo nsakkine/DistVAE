@@ -2,7 +2,6 @@ from typing import Optional, List, Tuple, Union
 
 import torch
 import torch.nn as nn
-import torch.distributed as dist
 from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.modules.utils import _triple
@@ -11,18 +10,14 @@ from torch.nn.common_types import _size_3_t
 from distvae.utils import DistributedEnv
 from distvae.models.layers.conv import (
     get_world_size_and_rank,
-    calc_patch_index,
-    calc_halo_width,
-    calc_bottom_halo_width,
-    calc_top_halo_width,
     correct_end,
     correct_start,
     build_crop_slice,
-    adjust_padding_for_patch,
-    exchange_halo,
 )
+from distvae.models.layers.conv_mixin import PatchConvMixin
 
-class PatchConv3d(nn.Conv3d):
+
+class PatchConv3d(nn.Conv3d, PatchConvMixin):
     def __init__(
         self,
         in_channels: int,
@@ -54,8 +49,8 @@ class PatchConv3d(nn.Conv3d):
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             groups, bias, padding_mode, device, dtype)
 
-    def _adjust_padding_for_patch(self, padding, rank, world_size, patch_dim: int = 2):
-        return adjust_padding_for_patch(padding, rank, world_size, patch_dim, ndim=5)
+    def _patch_ndim(self) -> int:
+        return 5
 
     def _conv_forward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):
         bs, channels, f, h, w = input.shape
@@ -70,88 +65,27 @@ class PatchConv3d(nn.Conv3d):
             return F.conv3d(input, weight, bias, self.stride,
                             self.padding, self.dilation, self.groups)
         else:
-            patch_dim = self.patch_dim if self.patch_dim >= 0 else input.ndim + self.patch_dim
-            patch_size = input.shape[patch_dim]
-            spatial_idx = patch_dim - 2
-            kernel_size_patch_dim = (
-                self.kernel_size[spatial_idx]
-                if isinstance(self.kernel_size, tuple) else self.kernel_size
-            )
-            padding_patch_dim = (
-                self.padding[spatial_idx]
-                if isinstance(self.padding, tuple) else self.padding
-            )
-            stride_patch_dim = (
-                self.stride[spatial_idx]
-                if isinstance(self.stride, tuple) else self.stride
-            )
-
-            # 1. get the meta data of input tensor and conv operation
-            patch_list = [
-                torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device())
-                for _ in range(group_world_size)
-            ]
-            dist.all_gather(
-                patch_list,
-                torch.tensor([input.shape[patch_dim]], dtype=torch.int64, device=DistributedEnv.get_device()),
-                group=DistributedEnv.get_vae_group()
-            )
-            patch_index = calc_patch_index(patch_list)
-            halo_width = calc_halo_width(
-                rank_in_group,
-                patch_index,
-                kernel_size_patch_dim,
-                padding_patch_dim,
-                stride_patch_dim
-            )
-            prev_bottom_halo_width: int = 0
-            next_top_halo_width: int = 0
-            if rank_in_group != 0:
-                prev_bottom_halo_width = calc_bottom_halo_width(
-                    rank_in_group - 1,
-                    patch_index,
-                    kernel_size_patch_dim,
-                    padding_patch_dim,
-                    stride_patch_dim
-                )
-            if rank_in_group != group_world_size - 1:
-                next_top_halo_width = calc_top_halo_width(
-                    rank_in_group + 1,
-                    patch_index,
-                    kernel_size_patch_dim,
-                    padding_patch_dim,
-                    stride_patch_dim
-                )
-                next_top_halo_width = max(0, next_top_halo_width)
-
-            input = exchange_halo(
+            (
                 input,
                 patch_dim,
-                patch_index,
+                patch_size,
                 halo_width,
-                prev_bottom_halo_width,
-                next_top_halo_width,
+                kernel_size_patch_dim,
+                padding_patch_dim,
+                stride_patch_dim,
+                patch_index,
                 group_world_size,
                 rank_in_group,
-            )
-
-            # 3. do convolution and postprocess
+            ) = self._multi_rank_metadata_and_halo(input)
             conv_res: Tensor
             padding = self._adjust_padding_for_patch(
                 self._reversed_padding_repeated_twice,
                 rank=rank_in_group,
                 world_size=group_world_size,
-                patch_dim=patch_dim
+                patch_dim=patch_dim,
             )
             bs, channels, f, h, w = input.shape
-            if (
-                self.block_size == 0 or
-                (
-                    (f <= self.block_size) if isinstance(self.block_size, int) else (f <= self.block_size[0]) and
-                    (h <= self.block_size) if isinstance(self.block_size, int) else (h <= self.block_size[1]) and
-                    (w <= self.block_size) if isinstance(self.block_size, int) else (w <= self.block_size[2])
-                )
-            ):
+            if self._use_direct_path(input):
                 if self.padding_mode != 'zeros':
                     conv_res = F.conv3d(F.pad(input, padding, mode=self.padding_mode),
                                         weight, bias, self.stride,
