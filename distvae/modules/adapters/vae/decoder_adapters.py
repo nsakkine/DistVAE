@@ -5,6 +5,12 @@ import torch
 import torch.nn as nn
 from torch.distributed import ProcessGroup
 from torch.profiler import profile, ProfilerActivity
+from diffusers.models.autoencoders.vae import Decoder
+from diffusers.models.unets.unet_2d_blocks import UpDecoderBlock2D
+from diffusers.models.autoencoders.autoencoder_kl_wan import (
+    WanUpBlock,
+    WanResidualUpBlock,
+)
 
 from distvae.models.vae import PatchDecoder
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
@@ -14,13 +20,6 @@ from distvae.modules.adapters.upsampling_adapters import WanResidualUpBlockAdapt
 from distvae.modules.adapters.midblock_adapters import WanMidBlockAdapter
 from distvae.modules.patch_utils import Patchify, DePatchify
 from distvae.utils import DistributedEnv
-from diffusers.models.autoencoders.vae import Decoder
-from diffusers.models.unets.unet_2d_blocks import UpDecoderBlock2D
-from diffusers.models.autoencoders.autoencoder_kl_wan import (
-    WanMidBlock,
-    WanUpBlock,
-    WanResidualUpBlock,
-)
 
 try:
     import torch_musa
