@@ -47,20 +47,30 @@ class Upsample2DAdapter(nn.Module):
 
 
 class WanResampleAdapter(nn.Module):
-    def __init__(self, wan_resample: WanResample, conv_block_size = 0):
+    def __init__(
+        self,
+        wan_resample: WanResample,
+        conv_block_size = 0,
+        patch_dim: int = -2,
+    ):
         super().__init__()
-        assert isinstance(wan_resample, WanResample), "WanResampleAdapter does not support resample except WanResample"
+        assert isinstance(wan_resample, WanResample), (
+            "WanResampleAdapter does not support resample except WanResample"
+        )
         self.resample = wan_resample
-        patch_dim = DistributedEnv.get_patch_dim()
         if patch_dim == -3:
             raise ValueError("WanResampleAdapter does not support patch_dim F (-3); use H (-2) or W (-1).")
         if hasattr(wan_resample, "time_conv"):
-            wan_resample.time_conv = WanCausalConv3dAdapter(wan_resample.time_conv, block_size=conv_block_size)
+            wan_resample.time_conv = WanCausalConv3dAdapter(
+                wan_resample.time_conv, block_size=conv_block_size, patch_dim=patch_dim
+        )
         if isinstance(wan_resample.resample, nn.ModuleList):
             resample = []
             for layer in wan_resample.resample:
                 if isinstance(layer, nn.Conv2d):
-                    resample.append(Conv2dAdapter(layer, block_size=conv_block_size, patch_dim=patch_dim))
+                    resample.append(
+                        Conv2dAdapter(layer, block_size=conv_block_size, patch_dim=patch_dim)
+                    )
                 else:
                     resample.append(layer)
             self.resample.resample = nn.ModuleList(resample)
@@ -72,16 +82,27 @@ class WanResampleAdapter(nn.Module):
 
 
 class WanUpBlockAdapter(nn.Module):
-    def __init__(self, wan_up_block: WanUpBlock, conv_block_size = 0):
+    def __init__(
+        self,
+        wan_up_block: WanUpBlock,
+        conv_block_size = 0,
+        patch_dim: int = -2,
+    ):
         super().__init__()
-        assert isinstance(wan_up_block, WanUpBlock), "WanUpBlockAdapter does not support up block except WanUpBlock"
+        assert isinstance(wan_up_block, WanUpBlock), (
+            "WanUpBlockAdapter does not support up block except WanUpBlock"
+        )
         self.up_block = wan_up_block
         self.up_block.resnets = nn.ModuleList([
-            WanResidualBlockAdapter(resnet, conv_block_size=conv_block_size) for resnet in wan_up_block.resnets
+            WanResidualBlockAdapter(
+                resnet, conv_block_size=conv_block_size, patch_dim=patch_dim)
+                for resnet in wan_up_block.resnets
         ])
         if wan_up_block.upsamplers is not None:
             self.up_block.upsamplers = nn.ModuleList([
-                WanResampleAdapter(upsampler, conv_block_size=conv_block_size) for upsampler in wan_up_block.upsamplers
+                WanResampleAdapter(
+                    upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                ) for upsampler in wan_up_block.upsamplers
             ])
 
     def forward(self, x, feat_cache=None, feat_idx=[0], first_chunk=False):

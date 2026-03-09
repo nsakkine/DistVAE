@@ -94,16 +94,19 @@ class DecoderAdapter(nn.Module):
 
 
 class WanMidBlockAdapter(nn.Module):
-    def __init__(self, wan_mid_block: WanMidBlock, conv_block_size = 0):
+    def __init__(self, wan_mid_block: WanMidBlock, conv_block_size = 0, patch_dim: int = -2):
         super().__init__()
 
         assert isinstance(wan_mid_block, WanMidBlock), "WanMidBlockAdapter does not support mid block except WanMidBlock"
         self.mid_block = wan_mid_block
         self.mid_block.resnets = nn.ModuleList([
-            WanResidualBlockAdapter(resnet, conv_block_size=conv_block_size) for resnet in wan_mid_block.resnets
+            WanResidualBlockAdapter(
+                resnet, conv_block_size=conv_block_size, patch_dim=patch_dim
+            ) for resnet in wan_mid_block.resnets
         ])
         self.mid_block.attentions = nn.ModuleList([
-            WanAttentionBlockAdapter(attn) for attn in wan_mid_block.attentions
+            WanAttentionBlockAdapter(attn, patch_dim=patch_dim)
+            for attn in wan_mid_block.attentions
         ])
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
@@ -127,12 +130,22 @@ class WanDecoderAdapter(nn.Module):
         self.patch_dim = patch_dim
         DistributedEnv.set_patch_dim(patch_dim)
         self.decoder = decoder
-        self.decoder.conv_in = WanCausalConv3dAdapter(decoder.conv_in, block_size=conv_block_size)
-        self.decoder.mid_block = WanMidBlockAdapter(decoder.mid_block, conv_block_size=conv_block_size)
+        self.decoder.conv_in = WanCausalConv3dAdapter(
+            decoder.conv_in, block_size=conv_block_size, patch_dim=patch_dim
+        )
+        self.decoder.mid_block = WanMidBlockAdapter(
+            decoder.mid_block, conv_block_size=conv_block_size, patch_dim=patch_dim
+        )
         self.decoder.up_blocks = nn.ModuleList([
-            WanUpBlockAdapter(up_block, conv_block_size=conv_block_size) for up_block in decoder.up_blocks
+            WanUpBlockAdapter(
+                up_block,
+                conv_block_size=conv_block_size,
+                patch_dim=patch_dim
+            ) for up_block in decoder.up_blocks
         ])
-        self.decoder.conv_out = WanCausalConv3dAdapter(decoder.conv_out, block_size=conv_block_size)
+        self.decoder.conv_out = WanCausalConv3dAdapter(
+            decoder.conv_out, block_size=conv_block_size, patch_dim=patch_dim
+        )
         self.patchify = Patchify()
         self.depatchify = DePatchify()
         self.use_profiler = use_profiler
