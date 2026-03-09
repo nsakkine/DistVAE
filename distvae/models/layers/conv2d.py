@@ -1,13 +1,22 @@
+from typing import Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
 import torch.distributed as dist
 from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.modules.utils import _pair
-
 from torch.nn.common_types import _size_2_t
-from typing import Optional, List, Tuple, Union
+
 from distvae.utils import DistributedEnv
+from distvae.models.layers.conv import (
+    get_world_size_and_rank,
+    calc_patch_index,
+    calc_halo_width,
+    calc_bottom_halo_width,
+    calc_top_halo_width
+)
+
 
 class PatchConv2d(nn.Conv2d):
     def __init__(
@@ -41,74 +50,15 @@ class PatchConv2d(nn.Conv2d):
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             groups, bias, padding_mode, device, dtype)
 
-    def _get_world_size_and_rank(self):
-        group_world_size = DistributedEnv.get_group_world_size()
-        global_rank = DistributedEnv.get_global_rank()
-        rank_in_group = DistributedEnv.get_rank_in_vae_group()
-        local_rank = DistributedEnv.get_local_rank()
-        return group_world_size, global_rank, rank_in_group, local_rank
-
-    def _calc_patch_index(self, patch_height_list: List[Tensor]):
-        height_index = []
-        cur = 0
-        for t in patch_height_list:
-            height_index.append(cur)
-            cur += t.item()
-        height_index.append(cur)
-        return height_index
-
-    def _calc_bottom_halo_width(self, rank, height_index, kernel_size, padding = 0, stride = 1):
-        assert rank >= 0, "rank should not be smaller than 0"
-        assert rank < len(height_index) - 1, "rank should be smaller than the length of height_index - 1"
-        assert padding >= 0, "padding should not smaller than 0"
-        assert stride > 0, "stride should be larger than 0"
-
-        if rank == DistributedEnv.get_group_world_size() - 1:
-            return 0
-        nstep_before_bottom = (height_index[rank + 1] + padding - (kernel_size - 1) // 2 + stride - 1) // stride
-        assert nstep_before_bottom > 0, "nstep_before_bottom should be larger than 0"
-        bottom_halo_width =  (nstep_before_bottom - 1) * stride + kernel_size - padding - height_index[rank + 1]
-        return max(0, bottom_halo_width)
-
-    def _calc_top_halo_width(self, rank, height_index, kernel_size, padding = 0, stride = 1):
-        assert rank >= 0, "rank should not be smaller than 0"
-        assert rank < len(height_index) - 1, "rank should be smaller than the length of height_index - 1"
-        assert padding >= 0, "padding should not smaller than 0"
-        assert stride > 0, "stride should be larger than 0"
-
-        if rank == 0:
-            return 0
-        nstep_before_top = (height_index[rank] + padding - (kernel_size - 1) // 2 + stride - 1) // stride
-        top_halo_width = height_index[rank] - (nstep_before_top * stride - padding)
-        return top_halo_width
-
-
-    def _calc_halo_width(self, rank, height_index, kernel_size, padding = 0, stride = 1):
-        '''
-            Calculate the width of halo region in height dimension.
-            The halo region is the region that is used for convolution but not included in the output.
-            return value: (top_halo_width, bottom_halo_width)
-        '''
-        halo_width = [
-            self._calc_top_halo_width(rank, height_index, kernel_size, padding, stride),
-            self._calc_bottom_halo_width(rank, height_index, kernel_size, padding, stride)
-        ]
-        if rank == 0:
-            halo_width[0] = 0
-        elif rank == DistributedEnv.get_group_world_size() - 1:
-            halo_width[1] = 0
-        return tuple(halo_width)
-
-
-    # in 2d case, padding is a tuple of 4 integers: (W_l, W_r, H_l, H_r) for F.pad
-    def _adjust_padding_for_patch(self, padding, rank, world_size, patch_dim_d: int = 2):
+        # in 2d case, padding is a tuple of 4 integers: (W_l, W_r, H_l, H_r) for F.pad
+    def _adjust_padding_for_patch(self,padding, rank, world_size, patch_dim: int = 2):
         if isinstance(padding, tuple):
             padding = list(padding)
         elif isinstance(padding, int):
             padding = [padding] * 4
         # patch_dim_d 2 = H (indices 2,3), 3 = W (indices 0,1)
-        right_idx = (3, 1)[patch_dim_d - 2]
-        left_idx = (2, 0)[patch_dim_d - 2]
+        right_idx = (3, 1)[patch_dim - 2]
+        left_idx = (2, 0)[patch_dim - 2]
         if rank == 0:
             padding[right_idx] = 0
         elif rank == world_size - 1:
@@ -121,7 +71,7 @@ class PatchConv2d(nn.Conv2d):
     def _conv_forward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):
         bs, channels, h, w = input.shape
 
-        group_world_size, global_rank, rank_in_group, local_rank = self._get_world_size_and_rank()
+        group_world_size, global_rank, rank_in_group, local_rank = get_world_size_and_rank()
 
         if (group_world_size == 1):
             if self.padding_mode != 'zeros':
@@ -158,8 +108,8 @@ class PatchConv2d(nn.Conv2d):
                 torch.tensor([patch_size], dtype=torch.int64, device=DistributedEnv.get_device()),
                 group=DistributedEnv.get_vae_group()
             )
-            patch_height_index = self._calc_patch_index(patch_height_list)
-            halo_width = self._calc_halo_width(
+            patch_height_index = calc_patch_index(patch_height_list)
+            halo_width = calc_halo_width(
                 rank_in_group,
                 patch_height_index,
                 kernel_size_patch_dim,
@@ -169,7 +119,7 @@ class PatchConv2d(nn.Conv2d):
             prev_bottom_halo_width: int = 0
             next_top_halo_width: int = 0
             if rank_in_group != 0:
-                prev_bottom_halo_width = self._calc_bottom_halo_width(
+                prev_bottom_halo_width = calc_bottom_halo_width(
                     rank_in_group - 1,
                     patch_height_index,
                     kernel_size_patch_dim,
@@ -177,7 +127,7 @@ class PatchConv2d(nn.Conv2d):
                     stride_patch_dim
                 )
             if rank_in_group != group_world_size - 1:
-                next_top_halo_width = self._calc_top_halo_width(
+                next_top_halo_width = calc_top_halo_width(
                     rank_in_group + 1,
                     patch_height_index,
                     kernel_size_patch_dim,
@@ -267,7 +217,7 @@ class PatchConv2d(nn.Conv2d):
                 self._reversed_padding_repeated_twice,
                 rank=rank_in_group,
                 world_size=group_world_size,
-                patch_dim_d=patch_dim
+                patch_dim=patch_dim
             )
             bs, channels, h, w = input.shape
             if self.block_size == 0 or (
