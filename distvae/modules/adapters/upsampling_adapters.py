@@ -8,7 +8,7 @@ from distvae.models.upsampling import PatchUpsample2D
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
 from diffusers.models.upsampling import Upsample2D
-from diffusers.models.autoencoders.autoencoder_kl_wan import WanResample, WanUpBlock
+from diffusers.models.autoencoders.autoencoder_kl_wan import WanResample, WanResidualUpBlock, WanUpBlock
 
 
 class Upsample2DAdapter(nn.Module):
@@ -79,6 +79,34 @@ class WanResampleAdapter(nn.Module):
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         return self.resample(x, feat_cache=feat_cache, feat_idx=feat_idx)
+
+
+class WanResidualUpBlockAdapter(nn.Module):
+    def __init__(
+        self,
+        wan_residual_up_block: WanResidualUpBlock,
+        conv_block_size = 0,
+        patch_dim: int = -2,
+    ):
+        super().__init__()
+        assert isinstance(wan_residual_up_block, WanResidualUpBlock), (
+            "WanResidualUpBlockAdapter does not support up block except WanResidualUpBlock"
+        )
+        self.residual_up_block = wan_residual_up_block
+        self.residual_up_block.resnets = nn.ModuleList([
+            WanResidualBlockAdapter(
+                resnet, conv_block_size=conv_block_size, patch_dim=patch_dim)
+                for resnet in wan_residual_up_block.resnets
+        ])
+        if wan_residual_up_block.upsamplers is not None:
+            self.residual_up_block.upsamplers = nn.ModuleList([
+                WanResampleAdapter(
+                    upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                ) for upsampler in wan_residual_up_block.upsamplers
+            ])
+
+    def forward(self, x, feat_cache=None, feat_idx=[0], first_chunk=False):
+        return self.residual_up_block(x, feat_cache=feat_cache, feat_idx=feat_idx, first_chunk=first_chunk)
 
 
 class WanUpBlockAdapter(nn.Module):

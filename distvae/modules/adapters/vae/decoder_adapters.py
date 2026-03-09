@@ -12,13 +12,15 @@ from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCaus
 from distvae.modules.adapters.layers.norm_adapters import GroupNormAdapter
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
 from distvae.modules.adapters.unets.unet_2d_blocks_adapters import UpDecoderBlock2DAdapter
-from distvae.modules.adapters.upsampling_adapters import WanUpBlockAdapter
+from distvae.modules.adapters.upsampling_adapters import WanResidualUpBlockAdapter, WanUpBlockAdapter
 from distvae.modules.patch_utils import Patchify, DePatchify
 from distvae.utils import DistributedEnv
 from diffusers.models.autoencoders.vae import Decoder
 from diffusers.models.unets.unet_2d_blocks import UpDecoderBlock2D
 from diffusers.models.autoencoders.autoencoder_kl_wan import (
     WanMidBlock,
+    WanUpBlock,
+    WanResidualUpBlock,
 )
 
 try:
@@ -136,13 +138,25 @@ class WanDecoderAdapter(nn.Module):
         self.decoder.mid_block = WanMidBlockAdapter(
             decoder.mid_block, conv_block_size=conv_block_size, patch_dim=patch_dim
         )
-        self.decoder.up_blocks = nn.ModuleList([
-            WanUpBlockAdapter(
-                up_block,
-                conv_block_size=conv_block_size,
-                patch_dim=patch_dim
-            ) for up_block in decoder.up_blocks
-        ])
+        up_blocks = []
+        for up_block in decoder.up_blocks:
+            if isinstance(up_block, WanUpBlock):
+                up_blocks.append(
+                    WanUpBlockAdapter(
+                        up_block,
+                        conv_block_size=conv_block_size,
+                        patch_dim=patch_dim
+                    )
+                )
+            elif isinstance(up_block, WanResidualUpBlock):
+                up_blocks.append(
+                    WanResidualUpBlockAdapter(
+                        up_block,
+                        conv_block_size=conv_block_size,
+                        patch_dim=patch_dim
+                    )
+                )                
+        self.decoder.up_blocks = nn.ModuleList(up_blocks)
         self.decoder.conv_out = WanCausalConv3dAdapter(
             decoder.conv_out, block_size=conv_block_size, patch_dim=patch_dim
         )
