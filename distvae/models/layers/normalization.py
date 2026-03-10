@@ -1,9 +1,9 @@
+import math
 import numbers
 from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.distributed as dist
 from torch import Tensor
 
@@ -13,9 +13,16 @@ from distvae.utils import DistributedEnv
 
 class PatchAdaGroupNorm(nn.Module):
     def __init__(
-        self, embedding_dim: int, out_dim: int, num_groups: int, act_fn: Optional[str] = None, eps: float = 1e-5
+        self,
+        embedding_dim: int,
+        out_dim: int,
+        num_groups: int,
+        act_fn: Optional[str] = None,
+        eps: float = 1e-5,
+        patch_dim: int = -2,
     ):
         super().__init__()
+        self.patch_dim = patch_dim
         self.num_groups = num_groups
         self.eps = eps
 
@@ -27,41 +34,49 @@ class PatchAdaGroupNorm(nn.Module):
         self.linear = nn.Linear(embedding_dim, out_dim * 2)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
+        patch_dim = self.patch_dim if self.patch_dim >= 0 else x.ndim + self.patch_dim
+
         if self.act:
             emb = self.act(emb)
         emb = self.linear(emb)
         # Support 4D (N,C,H,W) and 5D (N,C,F,H,W); patch dim is always first spatial (index 2).
-        if x.ndim == 5:
-            emb = emb[:, :, None, None, None]
-        else:
-            emb = emb[:, :, None, None]
+        emb = emb[:, :, None, None, None] if x.ndim == 5 else emb[:, :, None, None]
         scale, shift = emb.chunk(2, dim=1)
 
         world_size = DistributedEnv.get_world_size()
-        height_list = [torch.empty([1], dtype=torch.int64) for _ in range(world_size)]
-        dist.all_gather(height_list, torch.tensor([x.shape[2]], dtype=torch.int64), group=DistributedEnv.get_vae_group())
-        height = torch.tensor(height_list).sum()
+        patch_size_list = [torch.empty([1], dtype=torch.int64) for _ in range(world_size)]
+        dist.all_gather(
+            patch_size_list,
+            torch.tensor([x.shape[patch_dim]], dtype=torch.int64),
+            group=DistributedEnv.get_vae_group()
+        )
+        patch_size = torch.tensor(patch_size_list).sum().item()
 
         channels_per_group = x.shape[1] // self.num_groups
-        if x.ndim == 5:
-            nelements = channels_per_group * height * x.shape[-2] * x.shape[-1]
-        else:
-            nelements = channels_per_group * height * x.shape[-1]
-
+        nelements = (
+            channels_per_group *
+            math.prod(x.shape[2: patch_dim]) * patch_size * math.prod(x.shape[patch_dim + 1:])
+        )
         partial_sum = x.sum_to_size(x.shape[0], self.num_groups)
-        partial_sum_list = [torch.empty([x.shape[0], self.num_groups], dtype=x.dtype, device=x.device) for _ in range(world_size)]
+        partial_sum_list = [
+            torch.empty([x.shape[0], self.num_groups], dtype=x.dtype, device=x.device)
+            for _ in range(world_size)
+        ]
         dist.all_gather(partial_sum_list, partial_sum, group=DistributedEnv.get_vae_group())
-        group_sum = torch.tensor(partial_sum_list).sum(dim=0)
+        group_sum = torch.tensor(partial_sum_list, device=x.device).sum(dim=0)
         E = group_sum / nelements
-
         partial_var = ((x - E) ** 2).sum_to_size(x.shape[0], self.num_groups)
-        partial_var_list = [torch.empty([x.shape[0], self.num_groups], dtype=x.dtype, device=x.device) for _ in range(world_size)]
+        partial_var_list = [
+            torch.empty([x.shape[0], self.num_groups], dtype=x.dtype, device=x.device)
+            for _ in range(world_size)
+        ]
         dist.all_gather(partial_var_list, partial_var, group=DistributedEnv.get_vae_group())
-        group_var = torch.tensor(partial_var_list).sum(dim=0)
+        group_var = torch.tensor(partial_var_list, device=x.device).sum(dim=0)
         var = group_var / nelements
 
         x = (x - E) / torch.sqrt(var + self.eps)
         x = x * (1 + scale) + shift
+
         return x
 
 
@@ -111,59 +126,70 @@ class PatchGroupNorm(nn.GroupNorm):
         >>> output = m(input)
     """
 
-    def __init__(self, num_groups: int, num_channels: int, eps: float = 1e-5, affine: bool = True,
-                 device=None, dtype=None) -> None:
-        super().__init__(num_groups=num_groups, num_channels=num_channels, eps=eps, 
-                         affine=affine, device=device, dtype=dtype)
+    def __init__(
+        self,
+        num_groups: int,
+        num_channels: int,
+        eps: float = 1e-5,
+        affine: bool = True,
+        device=None,
+        dtype=None,
+        patch_dim: int = -2,
+    ) -> None:
+        self.patch_dim = patch_dim
+        super().__init__(
+            num_groups=num_groups,
+            num_channels=num_channels,
+            eps=eps,
+            affine=affine,
+            device=device,
+            dtype=dtype
+        )
     @torch.no_grad()
     def forward(self, x: Tensor) -> Tensor:
+        ndim = x.ndim
+        shape = x.shape
+        patch_dim = self.patch_dim if self.patch_dim >= 0 else ndim + self.patch_dim
+
         x = x.detach()
         # Support 4D (N,C,H,W) and 5D (N,C,F,H,W); patch dim is first spatial (index 2).
-        is_5d = x.ndim == 5
-        if is_5d:
-            height = torch.tensor(x.shape[2], dtype=torch.int64, device=x.device)
-            dist.all_reduce(height, group=DistributedEnv.get_vae_group())
-            channels_per_group = x.shape[1] // self.num_groups
-            nelements_rank = channels_per_group * x.shape[2] * x.shape[3] * x.shape[4]
-            nelements = channels_per_group * height * x.shape[3] * x.shape[4]
-        else:
-            height = torch.tensor(x.shape[-2], dtype=torch.int64, device=x.device)
-            dist.all_reduce(height, group=DistributedEnv.get_vae_group())
-            channels_per_group = x.shape[1] // self.num_groups
-            nelements_rank = channels_per_group * x.shape[-2] * x.shape[-1]
-            nelements = channels_per_group * height * x.shape[-1]
+        patch_size = torch.tensor(shape[patch_dim], dtype=torch.int64, device=x.device)
+        dist.all_reduce(patch_size, group=DistributedEnv.get_vae_group())
+        channels_per_group = shape[1] // self.num_groups
+        nelements = (
+            channels_per_group *
+            math.prod(shape[2: patch_dim]) *
+            patch_size *
+            math.prod(shape[patch_dim + 1: ])
+        )
+        nelements_rank = (nelements // patch_size) * shape[patch_dim]
 
-        if is_5d:
-            x = x.view(x.shape[0], self.num_groups, -1, x.shape[2], x.shape[3], x.shape[4])
-            group_sum = x.mean(dim=(2, 3, 4, 5), dtype=torch.float32)
-        else:
-            x = x.view(x.shape[0], self.num_groups, -1, x.shape[-2], x.shape[-1])
-            group_sum = x.mean(dim=(2, 3, 4), dtype=torch.float32)
+        x = x.view(shape[0], self.num_groups, -1, *shape[2: ])
+        group_sum = x.mean(dim=tuple(range(2, x.ndim)), dtype=torch.float32)
         group_sum = group_sum * nelements_rank
         dist.all_reduce(group_sum, group=DistributedEnv.get_vae_group())
         # shape: [bs, num_groups, 1, 1, 1] or [bs, num_groups, 1, 1, 1, 1]
         E = (group_sum / nelements)[:, :, None, None, None].to(x.dtype)
-        if is_5d:
-            E = E.unsqueeze(-1)
-
-        group_var_sum = torch.empty((x.shape[0], self.num_groups), dtype=torch.float32, device=x.device)
-        if is_5d:
-            torch.var(x, dim=(2, 3, 4, 5), out=group_var_sum)
-        else:
-            torch.var(x, dim=(2, 3, 4), out=group_var_sum)
+        group_var_sum = torch.empty(
+            (x.shape[0], self.num_groups),
+            dtype=torch.float32,
+            device=x.device
+        )
+        torch.var(x, dim=tuple(range(2, x.ndim)), out=group_var_sum)
         group_var_sum = group_var_sum * nelements_rank
         dist.all_reduce(group_var_sum, group=DistributedEnv.get_vae_group())
         var = (group_var_sum / nelements)[:, :, None, None, None].to(x.dtype)
-        if is_5d:
+        if ndim == 5:
+            E = E.unsqueeze(-1)
             var = var.unsqueeze(-1)
 
         x = (x - E) / torch.sqrt(var + self.eps)
-        if is_5d:
-            x = x.view(x.shape[0], -1, x.shape[-3], x.shape[-2], x.shape[-1])
-            x = x * self.weight[None, :, None, None, None] + self.bias[None, :, None, None, None]
-        else:
-            x = x.view(x.shape[0], -1, x.shape[-2], x.shape[-1])
-            x = x * self.weight[None, :, None, None] + self.bias[None, :, None, None]
+        x = x.view(x.shape[0], -1, *shape[2: ])
+        if self.weight is not None and self.bias is not None:
+            weight = self.weight.view(1, -1, *([1] * (ndim - 2)))
+            bias = self.bias.view(1, -1, *([1] * (ndim - 2)))
+            x = x * weight + bias
+
         return x
 
 
