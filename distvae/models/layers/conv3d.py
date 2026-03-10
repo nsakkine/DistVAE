@@ -1,4 +1,4 @@
-from typing import Optional, List, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -7,8 +7,7 @@ from torch.nn import functional as F
 from torch.nn.modules.utils import _triple
 from torch.nn.common_types import _size_3_t
 
-from distvae.utils import DistributedEnv
-from distvae.models.layers.conv import (
+from distvae.models.layers.conv_utils import (
     get_world_size_and_rank,
     correct_end,
     correct_start,

@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from torch.nn.modules.utils import _pair
 from torch.nn.common_types import _size_2_t
 
-from distvae.models.layers.conv import (
+from distvae.models.layers.conv_utils import (
     get_world_size_and_rank,
     correct_end,
     correct_start,

@@ -5,7 +5,7 @@ import torch.distributed as dist
 from torch import Tensor
 
 from distvae.utils import DistributedEnv
-from distvae.models.layers.conv import (
+from distvae.models.layers.conv_utils import (
     get_world_size_and_rank,
     calc_patch_index,
     calc_halo_width,
