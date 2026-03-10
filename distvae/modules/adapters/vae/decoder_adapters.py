@@ -138,8 +138,8 @@ class WanDecoderAdapter(nn.Module):
         self.decoder.conv_out = WanCausalConv3dAdapter(
             decoder.conv_out, block_size=conv_block_size, patch_dim=patch_dim
         )
-        self.patchify = Patchify()
-        self.depatchify = DePatchify()
+        self.patchify = Patchify(patch_dim=patch_dim)
+        self.depatchify = DePatchify(patch_dim=patch_dim)
         self.use_profiler = use_profiler
         self.vae_group = vae_group
 
