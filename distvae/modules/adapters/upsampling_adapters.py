@@ -98,12 +98,21 @@ class WanResidualUpBlockAdapter(nn.Module):
                 resnet, conv_block_size=conv_block_size, patch_dim=patch_dim)
                 for resnet in wan_residual_up_block.resnets
         ])
-        if wan_residual_up_block.upsamplers is not None:
-            self.residual_up_block.upsamplers = nn.ModuleList([
-                WanResampleAdapter(
-                    upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
-                ) for upsampler in wan_residual_up_block.upsamplers
-            ])
+        if hasattr(wan_residual_up_block, "upsamplers"):
+            if wan_residual_up_block.upsamplers is not None:
+                self.residual_up_block.upsamplers = nn.ModuleList([
+                    WanResampleAdapter(
+                        upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                    ) if isinstance(upsampler, WanResample) else upsampler
+                    for upsampler in wan_residual_up_block.upsamplers
+                ])
+        elif hasattr(wan_residual_up_block, "upsampler"):
+            if wan_residual_up_block.upsampler is not None:
+                upsampler = wan_residual_up_block.upsampler
+                if isinstance(upsampler, WanResample):
+                    self.residual_up_block.upsampler = WanResampleAdapter(
+                        upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                    )
 
     def forward(self, x, feat_cache=None, feat_idx=[0], first_chunk=False):
         return self.residual_up_block(x, feat_cache=feat_cache, feat_idx=feat_idx, first_chunk=first_chunk)
@@ -126,12 +135,21 @@ class WanUpBlockAdapter(nn.Module):
                 resnet, conv_block_size=conv_block_size, patch_dim=patch_dim)
                 for resnet in wan_up_block.resnets
         ])
-        if wan_up_block.upsamplers is not None:
-            self.up_block.upsamplers = nn.ModuleList([
-                WanResampleAdapter(
-                    upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
-                ) for upsampler in wan_up_block.upsamplers
-            ])
+        if hasattr(wan_up_block, "upsamplers"):
+            if wan_up_block.upsamplers is not None:
+                self.up_block.upsamplers = nn.ModuleList([
+                    WanResampleAdapter(
+                        upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                    ) if isinstance(upsampler, WanResample) else upsampler
+                    for upsampler in wan_up_block.upsamplers
+                ])
+        elif hasattr(wan_up_block, "upsampler"):
+            if wan_up_block.upsampler is not None:
+                upsampler = wan_up_block.upsampler
+                if isinstance(upsampler, WanResample):
+                    self.up_block.upsampler = WanResampleAdapter(
+                        upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                    )
 
     def forward(self, x, feat_cache=None, feat_idx=[0], first_chunk=False):
         return self.up_block(x, feat_cache=feat_cache, feat_idx=feat_idx, first_chunk=first_chunk)
