@@ -16,16 +16,11 @@ class WanAttentionBlockAdapter(torch.nn.Module):
     def __init__(
         self,
         module: nn.Module,
-        chunk_dim: int | None = None,
-        rank: int | None = None,
-        world_size: int | None = None,
         patch_dim: int = -2,
     ) -> None:
         super().__init__()
         self.module = module
         self.patch_dim = patch_dim
-        self.rank = rank if rank is not None else DistributedEnv.get_rank_in_vae_group()
-        self.world_size = world_size if world_size is not None else DistributedEnv.get_group_world_size()
 
     def forward(self, hidden_states: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
         patch_dim = self.patch_dim if self.patch_dim >= 0 else hidden_states.ndim + self.patch_dim

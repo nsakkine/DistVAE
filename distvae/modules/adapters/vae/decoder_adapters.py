@@ -33,6 +33,7 @@ class DecoderAdapter(nn.Module):
         vae_group: ProcessGroup = None,
         *,
         use_profiler: bool = False,
+        verbose: bool = False,
         conv_block_size = 0,
     ):
         super().__init__()
@@ -88,8 +89,11 @@ class DecoderAdapter(nn.Module):
         elapsed_time = end_time - start_time
         peak_memory = DistributedEnv.get_peak_memory(device_type)
 
-        if rank == 0:
-            print(f"Patch vae: [elapsed_time: {elapsed_time:.2f} sec, peak_memory: {peak_memory/1e9} GB]")
+        if self.verbose and rank == 0:
+            print(
+                f"Decoder: [elapsed_time: {elapsed_time:.2f} sec,"
+                f"peak_memory: {peak_memory/1e9} GB]"
+            )
         return output
 
 
@@ -100,6 +104,7 @@ class WanDecoderAdapter(nn.Module):
         vae_group: ProcessGroup = None,
         *,
         use_profiler: bool = False,
+        verbose: bool = False,
         conv_block_size = 0,
         patch_dim: int = -2,
     ):
@@ -195,6 +200,9 @@ class WanDecoderAdapter(nn.Module):
         elapsed_time = end_time - start_time
         peak_memory = DistributedEnv.get_peak_memory(device_type)
 
-        if rank == 0:
-            print(f"Patch vae: [elapsed_time: {elapsed_time:.2f} sec, peak_memory: {peak_memory/1e9} GB]")
+        if self.verbose and rank == 0:
+            print(
+                f"WanDecoder: [elapsed_time: {elapsed_time:.2f} sec, "
+                f"peak_memory: {peak_memory/1e9} GB]"
+            )
         return output
