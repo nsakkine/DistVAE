@@ -52,6 +52,7 @@ class DecoderAdapter(nn.Module):
         self.decoder.conv_act = decoder.conv_act
         self.decoder.conv_out = Conv2dAdapter(decoder.conv_out, block_size=conv_block_size)
         self.use_profiler = use_profiler
+        self.verbose = verbose
         self.vae_group = vae_group
 
     def forward(
@@ -146,6 +147,7 @@ class WanDecoderAdapter(nn.Module):
         self.patchify = Patchify(patch_dim=patch_dim)
         self.depatchify = DePatchify(patch_dim=patch_dim)
         self.use_profiler = use_profiler
+        self.verbose = verbose
         self.vae_group = vae_group
 
     def _forward(
