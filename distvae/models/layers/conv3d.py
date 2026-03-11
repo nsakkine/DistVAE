@@ -1,3 +1,12 @@
+"""PatchConv3d: 5D convolution with patch-dim parallelism for distributed VAE.
+
+When world size is 1, behaves as nn.Conv3d. When world size > 1, gathers patch
+sizes, exchanges halos along the patch dimension (F, H, or W), then either runs a
+single conv and crops (direct path) or splits the padded input into overlapping
+chunks, convs each chunk, concatenates, and crops (chunked path). Supports
+patch_dim in {-3, -2, -1, 2, 3, 4} for F, H, W. Dilation is not supported.
+"""
+
 from typing import Optional, Tuple, Union
 
 import torch
@@ -17,6 +26,14 @@ from distvae.models.layers.conv_mixin import PatchConvMixin
 
 
 class PatchConv3d(nn.Conv3d, PatchConvMixin):
+    """3D convolution with patch-dim parallelism; subclasses nn.Conv3d and PatchConvMixin.
+
+    patch_dim selects which spatial dimension is split across ranks (F=frame, H=height,
+    W=width). block_size controls when the chunked path is used: 0 or all spatial
+    sizes <= block_size => direct path (one conv + crop); otherwise chunked path.
+    Dilation must be 1.
+    """
+
     def __init__(
         self,
         in_channels: int,
@@ -33,7 +50,7 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
         block_size: Union[int, Tuple[int, int, int]] = 0,
         patch_dim: int = -2,
     ) -> None:
-
+        """patch_dim: which spatial dim is split (F=-3/3, H=-2/2, W=-1/4). block_size: 0 => prefer direct path; int or (F,H,W) => chunked when any spatial > block_size."""
         if isinstance(dilation, int):
             assert dilation == 1, "dilation is not supported in PatchConv3d"
         else:
@@ -49,6 +66,7 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
             groups, bias, padding_mode, device, dtype)
 
     def _patch_ndim(self) -> int:
+        """Return 5 for 3D (N, C, F, H, W)."""
         return 5
 
     def _conv_forward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):
@@ -56,6 +74,7 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
 
         group_world_size, global_rank, rank_in_group, local_rank = get_world_size_and_rank()
 
+        # Single rank: use standard F.conv3d (with optional padding_mode).
         if (group_world_size == 1):
             if self.padding_mode != 'zeros':
                 return F.conv3d(F.pad(input, self._reversed_padding_repeated_twice, mode=self.padding_mode),
@@ -63,6 +82,7 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
                                 _triple(0), self.dilation, self.groups)
             return F.conv3d(input, weight, bias, self.stride,
                             self.padding, self.dilation, self.groups)
+        # Multi-rank: get extended input and metadata from mixin (patch_index, halo_width, etc.), then choose direct or chunked path.
         else:
             (
                 input,
@@ -84,12 +104,14 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
                 patch_dim=patch_dim,
             )
             bs, channels, f, h, w = input.shape
+            # Direct path: one conv over the extended (halo-padded) input, then crop to this rank's patch output.
             if self._use_direct_path(input):
                 if self.padding_mode != 'zeros':
                     conv_res = F.conv3d(F.pad(input, padding, mode=self.padding_mode),
                                         weight, bias, self.stride,
                                         _triple(0), self.dilation, self.groups)
                 else:
+                    # Fast path: stride 1, padding 1, kernel 3 => no explicit pad, conv then crop.
                     if (
                         stride_patch_dim == 1 and
                         padding_patch_dim == 1 and
@@ -108,6 +130,7 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
                                             weight, bias, self.stride,
                                             _triple(0), self.dilation, self.groups)
                 return conv_res
+            # Chunked path: pad input, split into overlapping chunks along F, H, W; conv each chunk with padding=0; concat outputs; crop to this rank's patch.
             else:
                 if self.padding_mode != "zeros":
                     input = F.pad(input, padding, mode=self.padding_mode)
@@ -135,6 +158,7 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
                 else:
                     stride_f, stride_h, stride_w = self.stride
 
+                # Chunk boundaries aligned via correct_end/correct_start so conv outputs line up when concatenated.
                 outputs = []
                 for idx_f in range(num_chunks_in_f):
                     outer_output = []
