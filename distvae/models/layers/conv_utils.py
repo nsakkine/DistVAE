@@ -30,8 +30,9 @@ def calc_bottom_halo_width(rank, height_index, kernel_size, padding = 0, stride 
     assert rank < len(height_index) - 1, "rank should be smaller than the length of height_index - 1"
     assert padding >= 0, "padding should not smaller than 0"
     assert stride > 0, "stride should be larger than 0"
-
-    if rank == DistributedEnv.get_group_world_size() - 1:
+    world_size = len(height_index) - 1
+    print(rank, world_size)
+    if rank == world_size - 1:
         return 0
     nstep_before_bottom = (height_index[rank + 1] + padding - (kernel_size - 1) // 2 + stride - 1) // stride
     assert nstep_before_bottom > 0, "nstep_before_bottom should be larger than 0"
