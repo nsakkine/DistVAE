@@ -31,7 +31,6 @@ def calc_bottom_halo_width(rank, height_index, kernel_size, padding = 0, stride 
     assert padding >= 0, "padding should not smaller than 0"
     assert stride > 0, "stride should be larger than 0"
     world_size = len(height_index) - 1
-    print(rank, world_size)
     if rank == world_size - 1:
         return 0
     nstep_before_bottom = (height_index[rank + 1] + padding - (kernel_size - 1) // 2 + stride - 1) // stride
