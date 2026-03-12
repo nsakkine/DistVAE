@@ -13,6 +13,14 @@ if __name__ == "__main__":
         author_email="eigensystem1318@gmail.com",
         packages=find_packages(),
         install_requires=["torch>=2.2", "diffusers>=0.27.2", "transformers"],
+        extras_require={
+            "dev": [
+                "pytest",
+                "black",
+                "flake8",
+                "mypy",
+            ],
+        },
         url="https://github.com/xdit-project/DistVAE.",
         description="DistVAE: Patch Parallelism Distributed VAE for High-Resolution image generation",
         long_description=None,

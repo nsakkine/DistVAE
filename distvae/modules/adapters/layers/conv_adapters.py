@@ -1,6 +1,11 @@
-from distvae.models.layers.conv2d import PatchConv2d
-
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d
+from distvae.models.layers.conv2d import PatchConv2d
+from distvae.models.layers.conv3d import PatchConv3d
+
 
 class Conv2dAdapter(nn.Module):
     def __init__(
@@ -8,6 +13,7 @@ class Conv2dAdapter(nn.Module):
         conv2d: nn.Conv2d,
         *,
         block_size = 0,
+        patch_dim: int = -2,
     ):
         super().__init__()
         for i in conv2d.dilation:
@@ -25,9 +31,89 @@ class Conv2dAdapter(nn.Module):
             device=conv2d.weight.device,
             dtype=conv2d.weight.dtype,
             block_size=block_size,
+            patch_dim=patch_dim,
         )
         self.conv2d.weight.data = conv2d.weight.data
-        self.conv2d.bias.data = conv2d.bias.data
+        if conv2d.bias is not None:
+            self.conv2d.bias.data = conv2d.bias.data
 
     def forward(self, x):
         return self.conv2d(x)
+
+
+class Conv3dAdapter(nn.Module):
+    def __init__(
+        self, 
+        conv3d: nn.Conv3d,
+        *,
+        block_size = 0,
+        patch_dim: int = -2,
+    ):
+        super().__init__()
+        for i in conv3d.dilation:
+            assert i == 1, "dilation is not supported in Conv3dAdapter"
+        self.conv3d = PatchConv3d(
+            in_channels=conv3d.in_channels,
+            out_channels=conv3d.out_channels,
+            kernel_size=conv3d.kernel_size,
+            stride=conv3d.stride,
+            padding=conv3d.padding,
+            dilation=conv3d.dilation,
+            groups=conv3d.groups,
+            bias=conv3d.bias is not None,
+            padding_mode=conv3d.padding_mode,
+            device=conv3d.weight.device,
+            dtype=conv3d.weight.dtype,
+            block_size=block_size,
+            patch_dim=patch_dim,
+        )
+        self.conv3d.weight.data = conv3d.weight.data
+        if conv3d.bias is not None:
+            self.conv3d.bias.data = conv3d.bias.data
+
+    def forward(self, x):
+        return self.conv3d(x)
+
+
+class WanCausalConv3dAdapter(nn.Module):
+    def __init__(
+        self, 
+        causal_conv3d: WanCausalConv3d,
+        *,
+        block_size = 0,
+        patch_dim: int = -2,
+    ):
+        super().__init__()
+        for i in causal_conv3d.dilation:
+            assert i == 1, "dilation is not supported in WanCausalConv3dAdapter"
+        assert isinstance(causal_conv3d, WanCausalConv3d), (
+            "WanCausalConv3dAdapter does not support causal_conv3d except WanCausalConv3d"
+        )
+        self.conv3d = PatchConv3d(
+            in_channels=causal_conv3d.in_channels,
+            out_channels=causal_conv3d.out_channels,
+            kernel_size=causal_conv3d.kernel_size,
+            stride=causal_conv3d.stride,
+            padding=(0, causal_conv3d._padding[2], causal_conv3d._padding[0]),
+            dilation=causal_conv3d.dilation,
+            groups=causal_conv3d.groups,
+            bias=causal_conv3d.bias is not None,
+            padding_mode=causal_conv3d.padding_mode,
+            device=causal_conv3d.weight.device,
+            dtype=causal_conv3d.weight.dtype,
+            block_size=block_size,
+            patch_dim=patch_dim,
+        )
+        self.conv3d.weight.data = causal_conv3d.weight.data
+        if causal_conv3d.bias is not None:
+            self.conv3d.bias.data = causal_conv3d.bias.data
+        self._padding = (0, 0, 0, 0, causal_conv3d._padding[4], causal_conv3d._padding[5])
+
+    def forward(self, x, cache_x=None):
+        padding = list(self._padding)
+        if cache_x is not None and self._padding[4] > 0:
+            cache_x = cache_x.to(x.device)
+            x = torch.cat([cache_x, x], dim=2)
+            padding[4] -= cache_x.shape[2]
+        x = F.pad(x, padding)
+        return self.conv3d(x)

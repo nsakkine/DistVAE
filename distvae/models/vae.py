@@ -326,7 +326,6 @@ class PatchDecoder(nn.Module):
                     use_reentrant=False,
                 )
                 sample = sample.to(upscale_dtype)
-
                 sample = self.patch(sample)
                 # up
                 for up_block in self.up_blocks:
@@ -342,7 +341,6 @@ class PatchDecoder(nn.Module):
                     create_custom_forward(self.mid_block), sample, latent_embeds
                 )
                 sample = sample.to(upscale_dtype)
-
                 sample = self.patch(sample)
                 # up
                 for up_block in self.up_blocks:
@@ -351,7 +349,6 @@ class PatchDecoder(nn.Module):
             # middle
             sample = self.mid_block(sample, latent_embeds)
             sample = sample.to(upscale_dtype)
-
             # up
             sample = self.patch(sample)
             for up_block in self.up_blocks:
