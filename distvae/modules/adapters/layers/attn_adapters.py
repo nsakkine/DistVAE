@@ -22,6 +22,13 @@ class WanAttentionBlockAdapter(torch.nn.Module):
         self.module = module
         self.patch_dim = patch_dim
 
+        # Wrap any Conv2d layers inside the attention module with PatchConv adapters
+        # This is needed for 1x1 convs like to_qkv and proj
+        from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter
+        for name, submodule in module.named_children():
+            if isinstance(submodule, nn.Conv2d):
+                setattr(module, name, Conv2dAdapter(submodule, block_size=0, patch_dim=patch_dim))
+
     def forward(self, hidden_states: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
         patch_dim = self.patch_dim if self.patch_dim >= 0 else hidden_states.ndim + self.patch_dim
         rank = DistributedEnv.get_rank_in_vae_group()
