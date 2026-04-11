@@ -1,10 +1,8 @@
-import time
 from typing import Optional
 
 import torch
 import torch.nn as nn
 from torch.distributed import ProcessGroup
-from torch.profiler import profile, ProfilerActivity
 
 from distvae.modules.adapters.layers.conv_adapters import WanCausalConv3dAdapter
 from distvae.modules.adapters.midblock_adapters import WanMidBlockAdapter
@@ -15,12 +13,6 @@ from distvae.modules.adapters.downsampling_adapters import (
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
 from distvae.modules.patch_utils import Patchify, DePatchify
 from distvae.utils import DistributedEnv
-
-try:
-    import torch_musa
-except ModuleNotFoundError:
-    pass
-
 
 class WanEncoderAdapter(nn.Module):
     """
@@ -39,18 +31,15 @@ class WanEncoderAdapter(nn.Module):
     Args:
         encoder: The original Wan encoder to parallelize
         vae_group: ProcessGroup for distributed VAE computation
-        use_profiler: Whether to enable profiling (default: False)
-        verbose: Whether to print timing and memory stats (default: False)
         conv_block_size: Block size for convolution adapters (default: 0)
         patch_dim: Dimension to patch along (-2 for H, -1 for W, -3 not supported)
+        vae_config: VAE config for computing expected output dimensions
     """
     def __init__(
         self,
         encoder,
         vae_group: ProcessGroup = None,
         *,
-        use_profiler: bool = False,
-        verbose: bool = False,
         conv_block_size = 0,
         patch_dim: int = -2,
         vae_config = None,
@@ -123,9 +112,6 @@ class WanEncoderAdapter(nn.Module):
         # Setup patchify/depatchify for overlap handling
         self.patchify = Patchify(patch_dim=patch_dim)
         self.depatchify = DePatchify(patch_dim=patch_dim)
-        self.use_profiler = use_profiler
-        self.verbose = verbose
-        self.vae_group = vae_group
 
     def _forward(
         self,
@@ -133,7 +119,6 @@ class WanEncoderAdapter(nn.Module):
         feat_cache: Optional[torch.FloatTensor] = None,
         feat_idx: Optional[int] = 0,
         patchify: bool = True,
-        return_dict: bool = False,
     ):
         """Internal forward with optional patchify."""
         # Store original spatial dimensions to compute expected output size
@@ -170,55 +155,17 @@ class WanEncoderAdapter(nn.Module):
         feat_cache: Optional[torch.FloatTensor] = None,
         feat_idx: Optional[int] = 0,
         patchify: bool = True,
-        return_dict: bool = False,
     ):
         """
-        Forward pass with profiling and timing support.
+        Forward pass through the encoder.
 
         Args:
             sample: Input tensor to encode
             feat_cache: Optional feature cache for temporal consistency
             feat_idx: Feature index for caching
             patchify: Whether to apply patchify/depatchify (default: True)
-            return_dict: Whether to return AutoencoderKLOutput instead of plain tensor
 
         Returns:
-            Encoded latent tensor or AutoencoderKLOutput
+            Encoded latent tensor
         """
-        rank = DistributedEnv.get_global_rank()
-        device_type = DistributedEnv.get_device_type()
-        start_time = time.time()
-        elapsed_time = 0
-
-        if self.use_profiler:
-            if device_type == "musa":
-                torch.musa.memory._record_memory_history(enabled=None)
-                activities = [ProfilerActivity.CPU, ProfilerActivity.MUSA]
-            else:
-                torch.cuda.memory._record_memory_history(enabled=None)
-                activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
-
-            with profile(
-                activities=activities,
-                on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                    f"./profile/patch_vae_encoder_{rank}"
-                ),
-                profile_memory=True,
-                with_stack=True,
-                record_shapes=True,
-            ) as prof:
-                output = self._forward(sample, feat_cache, feat_idx, patchify, return_dict)
-            prof.export_memory_timeline(f"patch_vae_encoder_profiler_mem_{rank}.html")
-        else:
-            output = self._forward(sample, feat_cache, feat_idx, patchify, return_dict)
-
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        peak_memory = DistributedEnv.get_peak_memory(device_type)
-
-        if self.verbose and rank == 0:
-            print(
-                f"Encoder: [elapsed_time: {elapsed_time:.2f} sec, "
-                f"peak_memory: {peak_memory/1e9} GB]"
-            )
-        return output
+        return self._forward(sample, feat_cache, feat_idx, patchify)
