@@ -1,7 +1,9 @@
 from typing import Optional
+import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributed import ProcessGroup
 
 from distvae.modules.adapters.layers.conv_adapters import WanCausalConv3dAdapter
@@ -121,10 +123,37 @@ class WanEncoderAdapter(nn.Module):
         patchify: bool = True,
     ):
         """Internal forward with optional patchify."""
-        # Store original spatial dimensions to compute expected output size
+        # Store original spatial dimensions
         original_shape = sample.shape
 
         if patchify:
+            # Add padding to ensure dimensions are divisible by world_size * 2^downsample_count
+            # This follows SGLang's split_for_parallel_encode approach
+            group_world_size = DistributedEnv.get_group_world_size()
+
+            # Count number of downsampling operations (stride=2 layers)
+            # For Wan VAE, typically 3 downsample layers (8x spatial reduction)
+            downsample_count = 3
+            if self.vae_config is not None:
+                vae_spatial_scale = getattr(self.vae_config, 'scaling_factor', 8)
+                if hasattr(self.vae_config, 'vae_scale_factor_spatial'):
+                    vae_spatial_scale = self.vae_config.vae_scale_factor_spatial
+                # Infer downsample count from scale factor (2^downsample_count = scale)
+                downsample_count = int(math.log2(vae_spatial_scale))
+
+            # Calculate required padding to make dimensions divisible
+            # For 5D input (B, C, F, H, W), we need to pad both H and W dimensions
+            factor = group_world_size * (2 ** downsample_count)
+
+            # Pad H dimension (index -2)
+            orig_h = original_shape[-2]
+            pad_h = (factor - orig_h % factor) % factor
+
+            # F.pad expects (W_left, W_right, H_left, H_right, F_left, F_right) for 5D
+            if pad_h > 0:
+                sample = F.pad(sample, (0, 0, 0, pad_h, 0, 0), mode='constant', value=0)
+
+            # Now patchify the padded tensor
             sample = self.patchify(sample)
 
         # Call encoder without return_dict (WanEncoder3d doesn't support it)
@@ -133,7 +162,7 @@ class WanEncoderAdapter(nn.Module):
         sample = self.depatchify(sample)
 
         # Crop to expected dimensions to match what diffusers expects
-        # This handles the padding that parallel VAE adds
+        # This removes the padding we added above
         if patchify and self.vae_config is not None:
             # Calculate expected output dimensions based on VAE scaling
             vae_spatial_scale = getattr(self.vae_config, 'scaling_factor', 8)

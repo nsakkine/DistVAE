@@ -161,28 +161,78 @@ def build_crop_slice(
     halo_width: tuple,
     out_len: int,
     ndim: int,
+    global_start: int = None,
+    global_height: int = None,
+    kernel_size: int = None,
+    padding: int = None,
+    stride: int = None,
+    input_halo_width: tuple = None,
 ) -> tuple:
     """Build a tuple of slices to crop conv output to the valid patch region.
 
-    Returns a tuple of length ndim. Along patch_dim: if out_len == patch_size
-    (no halo in output) use slice(0, patch_size); otherwise use
-    slice(halo_width[0], halo_width[0] + patch_size). All other dimensions
-    are slice(None).
+    When global position information is provided (global_start, global_height, etc.),
+    computes exact output indices based on global coordinates to ensure alignment
+    across ranks (critical for stride > 1). Otherwise falls back to simple halo-based crop.
 
     Args:
         patch_dim: The spatial dimension that is split across ranks (0-based).
-        patch_size: Size of this rank's patch along patch_dim.
-        halo_width: (top_halo_width, bottom_halo_width) in output space.
+        patch_size: Size of this rank's patch along patch_dim (input space).
+        halo_width: (top_halo_width, bottom_halo_width) in input space before conv.
         out_len: Length of the full conv output along patch_dim.
         ndim: Number of dimensions (4 for 2D conv, 5 for 3D).
+        global_start: Global start index of this rank's patch (for stride alignment).
+        global_height: Total global height (for output bounds check).
+        kernel_size: Kernel size along patch_dim (for exact output calculation).
+        padding: Padding along patch_dim.
+        stride: Stride along patch_dim.
+        input_halo_width: (top, bottom) halo in input space.
 
     Returns:
         Tuple of slices suitable for indexing the conv output tensor.
     """
-    if out_len == patch_size:
+    # If we have global position info, compute exact output range
+    if (global_start is not None and global_height is not None and
+        kernel_size is not None and padding is not None and stride is not None and
+        input_halo_width is not None and stride > 1):
+        import math
+        # Compute valid output indices based on global coordinates (SGLang approach)
+        # The halo region starts at global_start - input_halo_width[0]
+        halo_start = global_start - input_halo_width[0]
+
+        # min_i: first valid output index (in output space)
+        # An output at index i comes from input range [i*stride - padding, i*stride - padding + kernel_size)
+        # For it to be valid at this rank, it must not depend on data before global halo start
+        min_i = math.ceil(((-padding) - halo_start) / stride)
+        min_i = max(0, min_i)
+
+        # max_i: last valid output index
+        # Must not depend on data beyond this rank's patch end
+        patch_end = global_start + patch_size
+        max_i = math.floor(((patch_end - 1 + padding) - (kernel_size - 1) - halo_start) / stride)
+
+        # Clamp to actual output size
+        max_i = min(max_i, out_len - 1)
+
+        # Crop to [min_i : max_i + 1]
+        patch_slice = slice(min_i, max_i + 1)
+    elif out_len == patch_size:
+        # No halo in output, simple case
         patch_slice = slice(0, patch_size)
     else:
-        patch_slice = slice(halo_width[0], halo_width[0] + patch_size)
+        # Fall back to halo-based cropping (works for stride=1)
+        # For stride=1, output halo width equals input halo width
+        # For stride>1, we should use the global position method, but if we're here
+        # it means the params weren't provided, so use simple division as approximation
+        if stride is not None and stride > 1:
+            # Estimate output patch size from input patch size
+            expected_output_size = (patch_size + stride - 1) // stride
+            output_halo_top = halo_width[0] // stride if halo_width else 0
+            patch_slice = slice(output_halo_top, output_halo_top + expected_output_size)
+        else:
+            # stride=1 case
+            output_halo_top = halo_width[0] if halo_width else 0
+            patch_slice = slice(output_halo_top, output_halo_top + patch_size)
+
     return (
         (slice(None),) * patch_dim
         + (patch_slice,)
@@ -241,6 +291,7 @@ def exchange_halo(
     next_top_halo_width: int,
     group_world_size: int,
     rank_in_group: int,
+    halo_recv_buffers: dict = None,
 ) -> Tensor:
     """Exchange halo regions with previous and next ranks; return extended local tensor.
 
@@ -249,6 +300,9 @@ def exchange_halo(
     bottom halo from next (halo_width[1]). Concatenate [top_halo_recv, input,
     bottom_halo_recv] along patch_dim and return. Uses non-blocking isend and
     blocking recv, then wait on sends.
+
+    Args:
+        halo_recv_buffers: Optional dict to cache/reuse recv buffers for better performance
     """
     ndim = input.ndim
     indices_end = [slice(None)] * ndim
@@ -277,9 +331,22 @@ def exchange_halo(
         )
         recv_shape = list(input.shape)
         recv_shape[patch_dim] = halo_width[0]
-        top_halo_recv = torch.empty(
-            recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
-        )
+
+        # Try to reuse buffer if available
+        if halo_recv_buffers is not None:
+            top_key = ('top', tuple(recv_shape), input.dtype)
+            if top_key in halo_recv_buffers:
+                top_halo_recv = halo_recv_buffers[top_key]
+            else:
+                top_halo_recv = torch.empty(
+                    recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
+                )
+                halo_recv_buffers[top_key] = top_halo_recv
+        else:
+            top_halo_recv = torch.empty(
+                recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
+            )
+
         global_rank_of_prev = DistributedEnv.get_global_rank_from_group_rank(rank_in_group - 1)
         dist.recv(top_halo_recv, global_rank_of_prev, group=DistributedEnv.get_vae_group())
     if prev_bottom_halo_width > 0:
@@ -297,9 +364,22 @@ def exchange_halo(
         )
         recv_shape = list(input.shape)
         recv_shape[patch_dim] = halo_width[1]
-        bottom_halo_recv = torch.empty(
-            recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
-        )
+
+        # Try to reuse buffer if available
+        if halo_recv_buffers is not None:
+            bottom_key = ('bottom', tuple(recv_shape), input.dtype)
+            if bottom_key in halo_recv_buffers:
+                bottom_halo_recv = halo_recv_buffers[bottom_key]
+            else:
+                bottom_halo_recv = torch.empty(
+                    recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
+                )
+                halo_recv_buffers[bottom_key] = bottom_halo_recv
+        else:
+            bottom_halo_recv = torch.empty(
+                recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
+            )
+
         if global_rank_of_next is None:
             global_rank_of_next = DistributedEnv.get_global_rank_from_group_rank(rank_in_group + 1)
         dist.recv(

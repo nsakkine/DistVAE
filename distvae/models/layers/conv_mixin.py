@@ -88,20 +88,34 @@ class PatchConvMixin:
             if isinstance(self.stride, tuple)
             else self.stride
         )
-        patch_list = [
-            torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device())
-            for _ in range(group_world_size)
-        ]
-        dist.all_gather(
-            patch_list,
-            torch.tensor(
-                [input.shape[patch_dim]],
-                dtype=torch.int64,
-                device=DistributedEnv.get_device(),
-            ),
-            group=DistributedEnv.get_vae_group(),
-        )
-        patch_index = calc_patch_index(patch_list)
+
+        # Cache patch sizes to avoid redundant all_gather calls
+        # Use a simple cache keyed by (patch_dim, patch_size, world_size)
+        cache_key = (patch_dim, patch_size, group_world_size)
+        cached_patch_index = getattr(self, '_patch_index_cache', {}).get(cache_key)
+
+        if cached_patch_index is not None:
+            patch_index = cached_patch_index
+        else:
+            patch_list = [
+                torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device())
+                for _ in range(group_world_size)
+            ]
+            dist.all_gather(
+                patch_list,
+                torch.tensor(
+                    [input.shape[patch_dim]],
+                    dtype=torch.int64,
+                    device=DistributedEnv.get_device(),
+                ),
+                group=DistributedEnv.get_vae_group(),
+            )
+            patch_index = calc_patch_index(patch_list)
+
+            # Cache for future use
+            if not hasattr(self, '_patch_index_cache'):
+                self._patch_index_cache = {}
+            self._patch_index_cache[cache_key] = patch_index
         halo_width = calc_halo_width(
             rank_in_group,
             patch_index,
@@ -132,6 +146,10 @@ class PatchConvMixin:
             assert halo_width[0] <= patch_size and halo_width[1] <= patch_size, (
                 "halo width is larger than the patch dimension of input tensor"
             )
+        # Initialize halo buffer cache lazily
+        if not hasattr(self, '_halo_recv_buffers'):
+            self._halo_recv_buffers = {}
+
         input = exchange_halo(
             input,
             patch_dim,
@@ -141,7 +159,22 @@ class PatchConvMixin:
             next_top_halo_width,
             group_world_size,
             rank_in_group,
+            halo_recv_buffers=self._halo_recv_buffers,
         )
+
+        # Stride alignment: when stride > 1, we need to align input to global stride grid
+        # to ensure output indices match across ranks (prevents border artifacts)
+        stride_shift = 0
+        if halo_width[0] > 0 and stride_patch_dim > 1:
+            global_start = patch_index[rank_in_group]
+            shift = (global_start - halo_width[0] + padding_patch_dim) % stride_patch_dim
+            if shift != 0:
+                stride_shift = shift
+                # Trim `shift` pixels from the top to align to stride grid
+                trim_slice = [slice(None)] * input.ndim
+                trim_slice[patch_dim] = slice(shift, None)
+                input = input[tuple(trim_slice)]
+                halo_width = (halo_width[0] - shift, halo_width[1])
         return (
             input,
             patch_dim,
@@ -153,4 +186,5 @@ class PatchConvMixin:
             patch_index,
             group_world_size,
             rank_in_group,
+            stride_shift,
         )

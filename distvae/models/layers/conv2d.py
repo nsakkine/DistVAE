@@ -76,6 +76,7 @@ class PatchConv2d(nn.Conv2d, PatchConvMixin):
                 patch_index,
                 group_world_size,
                 rank_in_group,
+                stride_shift,
             ) = self._multi_rank_metadata_and_halo(input)
             conv_res: Tensor
             padding = self._adjust_padding_for_patch(
@@ -98,6 +99,7 @@ class PatchConv2d(nn.Conv2d, PatchConvMixin):
                     ):
                         conv_res = F.conv2d(input, weight, bias, self.stride,
                                     self.padding, self.dilation, self.groups)
+                        # For stride=1, padding=1, kernel=3 special case: use simple halo crop
                         crop_slice = 4 * [slice(None),]
                         if halo_width[1] == 0:
                             crop_slice[patch_dim] = slice(halo_width[0], None)
@@ -108,6 +110,20 @@ class PatchConv2d(nn.Conv2d, PatchConvMixin):
                         conv_res = F.conv2d(F.pad(input, padding, "constant", 0.0),
                                         weight, bias, self.stride,
                                         _pair(0), self.dilation, self.groups)
+                        # For stride > 1, use global position-based cropping
+                        if stride_patch_dim > 1:
+                            global_start = patch_index[rank_in_group]
+                            global_height = patch_index[-1]
+                            crop_slice = build_crop_slice(
+                                patch_dim, patch_size, halo_width, conv_res.shape[patch_dim], ndim=4,
+                                global_start=global_start,
+                                global_height=global_height,
+                                kernel_size=kernel_size_patch_dim,
+                                padding=padding_patch_dim,
+                                stride=stride_patch_dim,
+                                input_halo_width=halo_width,
+                            )
+                            conv_res = conv_res[tuple(crop_slice)].contiguous()
                 return conv_res
             else:
                 if self.padding_mode != "zeros":
@@ -179,7 +195,18 @@ class PatchConv2d(nn.Conv2d, PatchConvMixin):
                         )
                     outputs.append(torch.cat(inner_output, dim=-1))
                 outputs = torch.cat(outputs, dim=-2)
+                # Get global position for precise output cropping when stride > 1
+                global_start = patch_index[rank_in_group]
+                global_height = patch_index[-1]  # Total height across all ranks
+                # Note: patch_size here is the LOCAL patch size (before halo exchange)
+                # but after stride_shift trimming
                 crop_slice = build_crop_slice(
-                    patch_dim, patch_size, halo_width, outputs.shape[patch_dim], ndim=4
+                    patch_dim, patch_size, halo_width, outputs.shape[patch_dim], ndim=4,
+                    global_start=global_start,
+                    global_height=global_height,
+                    kernel_size=kernel_size_patch_dim,
+                    padding=padding_patch_dim,
+                    stride=stride_patch_dim,
+                    input_halo_width=halo_width,
                 )
                 return outputs[tuple(crop_slice)].contiguous()

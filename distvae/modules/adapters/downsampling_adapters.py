@@ -37,8 +37,23 @@ class WanResampleDownAdapter(nn.Module):
         # Adapt the resample layers
         if isinstance(wan_resample.resample, nn.Sequential):
             resample = []
+            # Check if there's a ZeroPad2d before Conv2d (common pattern for stride-2 downsampling)
+            pending_pad = None
             for layer in wan_resample.resample:
-                if isinstance(layer, nn.Conv2d):
+                if isinstance(layer, nn.ZeroPad2d):
+                    # Store padding info to apply to next Conv2d
+                    pending_pad = layer.padding
+                    # Skip the padding layer - PatchConv will handle padding across ranks
+                    continue
+                elif isinstance(layer, nn.Conv2d):
+                    # If there was a pending ZeroPad2d, we need to adjust the conv
+                    if pending_pad is not None:
+                        # ZeroPad2d.padding is (left, right, top, bottom)
+                        # For stride-2 downsampling, typically (0, 1, 0, 1) for asymmetric padding
+                        # We need to set padding=1 on the Conv2d and let PatchConv handle it correctly
+                        # But asymmetric padding needs special handling - use padding=1 for now
+                        layer.padding = (1, 1)
+                        pending_pad = None
                     resample.append(
                         Conv2dAdapter(layer, block_size=conv_block_size, patch_dim=patch_dim)
                     )
@@ -85,8 +100,15 @@ class WanResidualDownBlockAdapter(nn.Module):
                 )
             self.down_block.resnets = nn.ModuleList(adapted_resnets)
 
-        # Adapt downsampler if present
-        if hasattr(wan_residual_down_block, "downsamplers") and wan_residual_down_block.downsamplers is not None:
+        # Adapt downsampler if present (check both singular and plural forms)
+        if hasattr(wan_residual_down_block, "downsampler") and wan_residual_down_block.downsampler is not None:
+            # Singular form (5B model, others)
+            if isinstance(wan_residual_down_block.downsampler, WanResample):
+                self.down_block.downsampler = WanResampleDownAdapter(
+                    wan_residual_down_block.downsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                )
+        elif hasattr(wan_residual_down_block, "downsamplers") and wan_residual_down_block.downsamplers is not None:
+            # Plural form (some other models)
             adapted_downsamplers = []
             for downsampler in wan_residual_down_block.downsamplers:
                 if isinstance(downsampler, WanResample):

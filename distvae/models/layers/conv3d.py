@@ -95,6 +95,7 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
                 patch_index,
                 group_world_size,
                 rank_in_group,
+                stride_shift,
             ) = self._multi_rank_metadata_and_halo(input)
             conv_res: Tensor
             padding = self._adjust_padding_for_patch(
@@ -129,6 +130,20 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
                         conv_res = F.conv3d(F.pad(input, padding, "constant", 0.0),
                                             weight, bias, self.stride,
                                             _triple(0), self.dilation, self.groups)
+                        # For stride > 1, use global position-based cropping
+                        if stride_patch_dim > 1:
+                            global_start = patch_index[rank_in_group]
+                            global_height = patch_index[-1]
+                            crop_slice = build_crop_slice(
+                                patch_dim, patch_size, halo_width, conv_res.shape[patch_dim], ndim=5,
+                                global_start=global_start,
+                                global_height=global_height,
+                                kernel_size=kernel_size_patch_dim,
+                                padding=padding_patch_dim,
+                                stride=stride_patch_dim,
+                                input_halo_width=halo_width,
+                            )
+                            conv_res = conv_res[tuple(crop_slice)].contiguous()
                 return conv_res
             # Chunked path: pad input, split into overlapping chunks along F, H, W; conv each chunk with padding=0; concat outputs; crop to this rank's patch.
             else:
@@ -204,7 +219,16 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
                         outer_output.append(torch.cat(inner_output, dim=-1))
                     outputs.append(torch.cat(outer_output, dim=-2))
                 outputs = torch.cat(outputs, dim=-3)
+                # Get global position for precise output cropping when stride > 1
+                global_start = patch_index[rank_in_group]
+                global_height = patch_index[-1]
                 crop_slice = build_crop_slice(
-                    patch_dim, patch_size, halo_width, outputs.shape[patch_dim], ndim=5
+                    patch_dim, patch_size, halo_width, outputs.shape[patch_dim], ndim=5,
+                    global_start=global_start,
+                    global_height=global_height,
+                    kernel_size=kernel_size_patch_dim,
+                    padding=padding_patch_dim,
+                    stride=stride_patch_dim,
+                    input_halo_width=halo_width,
                 )
                 return outputs[tuple(crop_slice)].contiguous()
