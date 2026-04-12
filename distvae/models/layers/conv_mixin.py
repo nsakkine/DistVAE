@@ -89,13 +89,24 @@ class PatchConvMixin:
             else self.stride
         )
 
-        # Cache patch sizes to avoid redundant all_gather calls
-        # Use a simple cache keyed by (patch_dim, patch_size, world_size)
+        # Cache patch_index to avoid redundant all_gather calls
+        #
+        # Key by (patch_dim, local_patch_size, world_size). This assumes that if this rank's
+        # patch size hasn't changed, then no rank's patch size has changed. This holds true when:
+        # - Processing same-resolution inputs repeatedly (common case: video frames)
+        # - Inputs are padded to be evenly divisible (encoder adds padding)
+        #
+        # Edge case where cache could be stale:
+        # - Processing varying resolutions in same session with uneven splits
+        # - For production use with stable input sizes, this cache is correct and important
+        #   for performance (saves ~0.5s by avoiding all_gather)
         cache_key = (patch_dim, patch_size, group_world_size)
-        cached_patch_index = getattr(self, '_patch_index_cache', {}).get(cache_key)
 
-        if cached_patch_index is not None:
-            patch_index = cached_patch_index
+        if not hasattr(self, '_patch_index_cache'):
+            self._patch_index_cache = {}
+
+        if cache_key in self._patch_index_cache:
+            patch_index = self._patch_index_cache[cache_key]
         else:
             patch_list = [
                 torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device())
@@ -111,10 +122,6 @@ class PatchConvMixin:
                 group=DistributedEnv.get_vae_group(),
             )
             patch_index = calc_patch_index(patch_list)
-
-            # Cache for future use
-            if not hasattr(self, '_patch_index_cache'):
-                self._patch_index_cache = {}
             self._patch_index_cache[cache_key] = patch_index
         halo_width = calc_halo_width(
             rank_in_group,

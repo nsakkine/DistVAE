@@ -21,7 +21,6 @@ class WanAttentionBlockAdapter(torch.nn.Module):
         super().__init__()
         self.module = module
         self.patch_dim = patch_dim
-        self._size_cache = None  # Cache for chunk sizes
 
         # Wrap any Conv2d layers inside the attention module with PatchConv adapters
         # This is needed for 1x1 convs like to_qkv and proj
@@ -36,27 +35,14 @@ class WanAttentionBlockAdapter(torch.nn.Module):
         world_size = DistributedEnv.get_group_world_size()
         device = hidden_states.device
 
-        # Cache chunk sizes to avoid redundant all_gather
-        current_size = hidden_states.shape[patch_dim]
-        if self._size_cache is not None and len(self._size_cache) == world_size:
-            # Verify cache is still valid (sizes haven't changed)
-            if self._size_cache[rank] == current_size:
-                chunk_sizes = self._size_cache
-            else:
-                # Size changed, need to refresh
-                self._size_cache = None
-
-        if self._size_cache is None:
-            size_list = [torch.empty(1, dtype=torch.int64, device=device) for _ in range(world_size)]
-            dist.all_gather(
-                size_list,
-                torch.tensor([hidden_states.shape[patch_dim]], dtype=torch.int64, device=device),
-                group=DistributedEnv.get_vae_group(),
-            )
-            chunk_sizes = [size_list[i].item() for i in range(world_size)]
-            self._size_cache = chunk_sizes
-        else:
-            chunk_sizes = self._size_cache
+        # Gather chunk sizes from all ranks
+        size_list = [torch.empty(1, dtype=torch.int64, device=device) for _ in range(world_size)]
+        dist.all_gather(
+            size_list,
+            torch.tensor([hidden_states.shape[patch_dim]], dtype=torch.int64, device=device),
+            group=DistributedEnv.get_vae_group(),
+        )
+        chunk_sizes = [size_list[i].item() for i in range(world_size)]
 
         base_shape = list(hidden_states.shape)
         gathered_tensors = []
