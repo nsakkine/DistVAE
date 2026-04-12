@@ -13,6 +13,7 @@ from distvae.modules.adapters.downsampling_adapters import (
     WanResampleDownAdapter
 )
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
+from distvae.modules.adapters.layers.attn_adapters import WanAttentionBlockAdapter
 from distvae.modules.patch_utils import Patchify, DePatchify
 from distvae.utils import DistributedEnv
 
@@ -94,7 +95,6 @@ class WanEncoderAdapter(nn.Module):
                 )
             elif isinstance(down_block, WanAttentionBlock):
                 # Attention blocks need to see full spatial context, so wrap with adapter
-                from distvae.modules.adapters.layers.attn_adapters import WanAttentionBlockAdapter
                 down_blocks.append(
                     WanAttentionBlockAdapter(down_block, patch_dim=patch_dim)
                 )

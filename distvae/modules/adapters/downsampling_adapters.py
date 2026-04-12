@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
@@ -34,25 +33,15 @@ class WanResampleDownAdapter(nn.Module):
         if isinstance(wan_resample.resample, nn.Sequential):
             resample = []
             # Check if there's a ZeroPad2d before Conv2d (common pattern for stride-2 downsampling)
-            pending_pad = None
             for layer in wan_resample.resample:
                 if isinstance(layer, nn.ZeroPad2d):
-                    # Store padding info to apply to next Conv2d
-                    pending_pad = layer.padding
-                    # Skip the padding layer - PatchConv will handle padding across ranks
+                    # Skip ZeroPad2d - PatchConv2d handles padding correctly with symmetric padding
+                    # across rank boundaries via halo exchange. Applying asymmetric padding here
+                    # would interfere with the distributed boundary handling.
                     continue
                 elif isinstance(layer, nn.Conv2d):
-                    # If there was a pending ZeroPad2d, we need to adjust the conv
-                    if pending_pad is not None:
-                        # ZeroPad2d.padding is (left, right, top, bottom)
-                        # For stride-2 downsampling, typically (0, 1, 0, 1) for asymmetric padding
-                        # We need to set padding=1 on the Conv2d and let PatchConv handle it correctly
-                        # But asymmetric padding needs special handling - use padding=1 for now
-                        layer.padding = (1, 1)
-                        pending_pad = None
-                    resample.append(
-                        Conv2dAdapter(layer, block_size=conv_block_size, patch_dim=patch_dim)
-                    )
+                    # Wrap Conv2d with adapter - use symmetric padding for distributed correctness
+                    resample.append(Conv2dAdapter(layer, block_size=conv_block_size, patch_dim=patch_dim))
                 else:
                     resample.append(layer)
             self.resample.resample = nn.Sequential(*resample)
