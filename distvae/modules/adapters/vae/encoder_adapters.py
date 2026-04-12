@@ -141,17 +141,24 @@ class WanEncoderAdapter(nn.Module):
                 # Infer downsample count from scale factor (2^downsample_count = scale)
                 downsample_count = int(math.log2(vae_spatial_scale))
 
-            # Calculate required padding to make dimensions divisible
-            # For 5D input (B, C, F, H, W), we need to pad both H and W dimensions
+            # Calculate required padding to make the split dimension divisible
             factor = group_world_size * (2 ** downsample_count)
 
-            # Pad H dimension (index -2)
-            orig_h = original_shape[-2]
-            pad_h = (factor - orig_h % factor) % factor
+            # Pad along the configured spatial split dimension so patchify/chunking
+            # preserves even patch sizes and stride alignment guarantees.
+            patch_dim = self.patch_dim
+            if patch_dim not in (-2, -1):
+                raise ValueError(f"Unsupported patch_dim for spatial padding: {patch_dim}")
+
+            orig_spatial = original_shape[patch_dim]
+            pad_spatial = (factor - orig_spatial % factor) % factor
 
             # F.pad expects (W_left, W_right, H_left, H_right, F_left, F_right) for 5D
-            if pad_h > 0:
-                sample = F.pad(sample, (0, 0, 0, pad_h, 0, 0), mode='constant', value=0)
+            if pad_spatial > 0:
+                if patch_dim == -2:
+                    sample = F.pad(sample, (0, 0, 0, pad_spatial, 0, 0), mode='constant', value=0)
+                else:
+                    sample = F.pad(sample, (0, pad_spatial, 0, 0, 0, 0), mode='constant', value=0)
 
             # Now patchify the padded tensor
             sample = self.patchify(sample)
