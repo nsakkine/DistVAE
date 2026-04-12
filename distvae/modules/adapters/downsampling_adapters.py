@@ -1,9 +1,5 @@
-from typing import Optional
-
 import torch
 import torch.nn as nn
-
-from distvae.utils import DistributedEnv
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
 from diffusers.models.autoencoders.autoencoder_kl_wan import WanResample, WanResidualDownBlock
