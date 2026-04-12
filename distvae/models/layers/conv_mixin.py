@@ -109,7 +109,7 @@ class PatchConvMixin:
             patch_index = self._patch_index_cache[cache_key]
         else:
             patch_list = [
-                torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device())
+                torch.zeros(1, dtype=torch.int64, device=input.device)
                 for _ in range(group_world_size)
             ]
             dist.all_gather(
@@ -117,7 +117,7 @@ class PatchConvMixin:
                 torch.tensor(
                     [input.shape[patch_dim]],
                     dtype=torch.int64,
-                    device=DistributedEnv.get_device(),
+                    device=input.device,
                 ),
                 group=DistributedEnv.get_vae_group(),
             )

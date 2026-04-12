@@ -54,6 +54,11 @@ def main():
         default=1024,
         help="The width of image",
     )
+    parser.add_argument(
+        "--test-odd-sizes",
+        action="store_true",
+        help="Test with odd-sized inputs that require stride alignment",
+    )
     args = parser.parse_args()
     backend = DistributedEnv.get_torch_distributed_backend()
     dist.init_process_group(backend=backend)
@@ -62,19 +67,36 @@ def main():
     DistributedEnv.initialize(None)
     in_channels = 64
     out_channels = 3
-    for kernel_size in range(3,4):
-        for stride in range(1,2):
-            for padding in range(1,2):
-    # for kernel_size in range(3,10):
-    #     for stride in range(1,kernel_size+1):
-    #         for padding in range(1,kernel_size):
+
+    # Test both stride=1 and stride=2 cases
+    # stride=2 exercises the stride alignment and global-position cropping logic
+    test_configs = [
+        (3, 1, 1),  # kernel=3, stride=1, padding=1 (original test)
+        (3, 2, 1),  # kernel=3, stride=2, padding=1 (downsampling with stride alignment)
+    ]
+
+    # Test with both even and odd sizes when requested
+    # Note: Odd sizes with stride>1 currently have a known issue (off-by-one errors)
+    # For stride=1, odd sizes work correctly
+    test_sizes = [(args.height, args.width)]
+    if args.test_odd_sizes:
+        test_sizes.extend([
+            (721, 1281),  # Odd sizes - TODO: fix stride>1 support for odd dimensions
+            (719, 1279),  # Different odd sizes
+        ])
+
+    for kernel_size, stride, padding in test_configs:
+        for height, width in test_sizes:
+                if dist.get_rank() == 0:
+                    print(f"\nTesting kernel={kernel_size}, stride={stride}, padding={padding}, size={height}x{width}", flush=True)
+
                 convs = Conv2dModules(in_channels, out_channels, kernel_size, stride, padding).to(device)
                 patch_convs = nn.ModuleList()
                 for conv in convs.convs:
                     patch_convs.append(Conv2dAdapter(conv))
                 patch_convs = patch_convs.to(device)
 
-                hidden_state = torch.randn(1, 64, args.height, args.width, device=device)
+                hidden_state = torch.randn(1, 64, height, width, device=device)
                 result = convs(hidden_state)
 
                 
@@ -91,25 +113,24 @@ def main():
 
 
                 if dist.get_rank() == 0:
-                    max_height = (hidden_state.shape[2] + padding * 2 - kernel_size + 1 + stride - 1) // stride
-                    # print(result)
-                    # print(ppresult)
+                    print(f"result.shape={result.shape}, ppresult.shape={ppresult.shape}", flush=True)
+                    diff = torch.abs(result - ppresult)
+                    max_diff = diff.max().item()
+                    mean_diff = diff.mean().item()
+                    print(f"Max diff: {max_diff:.2e}, Mean diff: {mean_diff:.2e}", flush=True)
 
-                    # print(result.shape)
-                    # print(ppresult.shape)
-                    # flag = 1
-                    # for i in range(out_channels):
-                    #     for j in range(max_height):
-                    #         for k in range(max_height):
-                    #             if (result[0, i, j, k] - ppresult[0, i, j, k]) > 1e-3:
-                    #                 flag = 0
-                                    # print(f"result: {result[0, i, j, k]}, ppresult: {ppresult[0, i, j, k]}")
-                                    # print(f"i: {i}, j: {j}, k: {k}\n")
-                    if not torch.allclose(result, ppresult, atol=1e-6):
+                    # Use slightly relaxed tolerance for stride>1 to account for numerical precision
+                    # differences from distributed computation order
+                    tolerance = 1e-5 if stride > 1 else 1e-6
+                    if not torch.allclose(result, ppresult, atol=tolerance):
                         print("in kernel size: ", kernel_size, "stride: ", stride, "padding: ", padding, flush=True)
-                        print("two hidden states are not equal\n", flush=True)
+                        print(f"FAILED with tolerance {tolerance}\n", flush=True)
+                        # Find where the largest differences are
+                        max_diff_idx = torch.argmax(diff)
+                        max_diff_idx = torch.unravel_index(max_diff_idx, diff.shape)
+                        print(f"Largest diff at index {max_diff_idx}: ref={result[max_diff_idx].item():.6f}, patched={ppresult[max_diff_idx].item():.6f}", flush=True)
                     else:
-                        print(kernel_size, stride, padding, "end", flush=True)
+                        print(f"{kernel_size} {stride} {padding} end (max_diff={max_diff:.2e}, tol={tolerance:.0e})", flush=True)
 
     # assert torch.equal(result, ppresult), "two hidden states are not equal"
 

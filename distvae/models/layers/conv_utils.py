@@ -334,17 +334,17 @@ def exchange_halo(
 
         # Try to reuse buffer if available
         if halo_recv_buffers is not None:
-            top_key = ('top', tuple(recv_shape), input.dtype)
+            top_key = ('top', tuple(recv_shape), input.dtype, input.device)
             if top_key in halo_recv_buffers:
                 top_halo_recv = halo_recv_buffers[top_key]
             else:
                 top_halo_recv = torch.empty(
-                    recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
+                    recv_shape, dtype=input.dtype, device=input.device
                 )
                 halo_recv_buffers[top_key] = top_halo_recv
         else:
             top_halo_recv = torch.empty(
-                recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
+                recv_shape, dtype=input.dtype, device=input.device
             )
 
         global_rank_of_prev = DistributedEnv.get_global_rank_from_group_rank(rank_in_group - 1)
@@ -367,17 +367,17 @@ def exchange_halo(
 
         # Try to reuse buffer if available
         if halo_recv_buffers is not None:
-            bottom_key = ('bottom', tuple(recv_shape), input.dtype)
+            bottom_key = ('bottom', tuple(recv_shape), input.dtype, input.device)
             if bottom_key in halo_recv_buffers:
                 bottom_halo_recv = halo_recv_buffers[bottom_key]
             else:
                 bottom_halo_recv = torch.empty(
-                    recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
+                    recv_shape, dtype=input.dtype, device=input.device
                 )
                 halo_recv_buffers[bottom_key] = bottom_halo_recv
         else:
             bottom_halo_recv = torch.empty(
-                recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
+                recv_shape, dtype=input.dtype, device=input.device
             )
 
         if global_rank_of_next is None:
