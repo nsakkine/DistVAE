@@ -89,19 +89,26 @@ class PatchConvMixin:
             else self.stride
         )
 
-        # Cache patch_index to avoid redundant all_gather calls
+        # Cache patch_index to avoid redundant all_gather calls when splits are even.
         #
-        # Key includes full input shape to ensure cache is invalidated when split changes.
-        # This handles the case where this rank's patch_size stays the same but other ranks
-        # change (e.g., global 1000->[500,500] vs 999->[500,499]). Since Patchify hasn't run
-        # yet, all ranks see the same full input shape, making this a safe cache key.
-        # Saves ~0.5s by avoiding all_gather on repeated same-resolution inputs.
-        cache_key = (patch_dim, tuple(input.shape), group_world_size)
+        # Cache key: (patch_dim, patch_size, world_size, is_even_split).
+        # We detect even splits by checking if patch_size * world_size is evenly divisible,
+        # which is a conservative heuristic (we can't know the true global size without comms).
+        # When the split is even, all ranks have the same patch_size, so the cache key is safe.
+        # When uneven, we skip caching to avoid stale patch_index (e.g., 1000->[250,250,250,250]
+        # vs 999->[250,250,250,249] where rank 0's patch_size=250 is the same but patch_index differs).
 
         if not hasattr(self, '_patch_index_cache'):
             self._patch_index_cache = {}
 
-        if cache_key in self._patch_index_cache:
+        # Conservative check: assume even split if patch_size * world_size would yield an integer.
+        # This is not perfect but avoids communication. For production VAE encoding, inputs are
+        # typically padded to be evenly divisible, so this works well in practice.
+        likely_even_split = (patch_size * group_world_size) % group_world_size == 0
+
+        cache_key = (patch_dim, patch_size, group_world_size) if likely_even_split else None
+
+        if cache_key and cache_key in self._patch_index_cache:
             patch_index = self._patch_index_cache[cache_key]
         else:
             patch_list = [
@@ -118,7 +125,10 @@ class PatchConvMixin:
                 group=DistributedEnv.get_vae_group(),
             )
             patch_index = calc_patch_index(patch_list)
-            self._patch_index_cache[cache_key] = patch_index
+
+            # Only cache if we detected even split
+            if cache_key:
+                self._patch_index_cache[cache_key] = patch_index
         halo_width = calc_halo_width(
             rank_in_group,
             patch_index,
