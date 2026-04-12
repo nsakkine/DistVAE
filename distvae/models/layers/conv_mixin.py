@@ -181,7 +181,7 @@ class PatchConvMixin:
                 trim_slice = [slice(None)] * input.ndim
                 trim_slice[patch_dim] = slice(shift, None)
                 input = input[tuple(trim_slice)]
-                halo_width = (halo_width[0] - shift, halo_width[1])
+                halo_width = (max(0, halo_width[0] - shift), halo_width[1])
         return (
             input,
             patch_dim,
