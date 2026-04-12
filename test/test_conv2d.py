@@ -87,50 +87,50 @@ def main():
 
     for kernel_size, stride, padding in test_configs:
         for height, width in test_sizes:
-                if dist.get_rank() == 0:
-                    print(f"\nTesting kernel={kernel_size}, stride={stride}, padding={padding}, size={height}x{width}", flush=True)
+            if dist.get_rank() == 0:
+                print(f"\nTesting kernel={kernel_size}, stride={stride}, padding={padding}, size={height}x{width}", flush=True)
 
-                convs = Conv2dModules(in_channels, out_channels, kernel_size, stride, padding).to(device)
-                patch_convs = nn.ModuleList()
-                for conv in convs.convs:
-                    patch_convs.append(Conv2dAdapter(conv))
-                patch_convs = patch_convs.to(device)
+            convs = Conv2dModules(in_channels, out_channels, kernel_size, stride, padding).to(device)
+            patch_convs = nn.ModuleList()
+            for conv in convs.convs:
+                patch_convs.append(Conv2dAdapter(conv))
+            patch_convs = patch_convs.to(device)
 
-                hidden_state = torch.randn(1, 64, height, width, device=device)
-                result = convs(hidden_state)
+            hidden_state = torch.randn(1, 64, height, width, device=device)
+            result = convs(hidden_state)
 
-                
-                if dist.get_rank() == 0: 
-                    print(kernel_size, stride, padding, "start", flush=True)
-                patch = Patchify()
-                depatch = DePatchify()
+            
+            if dist.get_rank() == 0: 
+                print(kernel_size, stride, padding, "start", flush=True)
+            patch = Patchify()
+            depatch = DePatchify()
 
-                patch_hidden_state = patch(hidden_state)
-                for conv in patch_convs:
-                    patch_hidden_state = conv(patch_hidden_state)
-                ppresult = depatch(patch_hidden_state)
+            patch_hidden_state = patch(hidden_state)
+            for conv in patch_convs:
+                patch_hidden_state = conv(patch_hidden_state)
+            ppresult = depatch(patch_hidden_state)
 
 
 
-                if dist.get_rank() == 0:
-                    print(f"result.shape={result.shape}, ppresult.shape={ppresult.shape}", flush=True)
-                    diff = torch.abs(result - ppresult)
-                    max_diff = diff.max().item()
-                    mean_diff = diff.mean().item()
-                    print(f"Max diff: {max_diff:.2e}, Mean diff: {mean_diff:.2e}", flush=True)
+            if dist.get_rank() == 0:
+                print(f"result.shape={result.shape}, ppresult.shape={ppresult.shape}", flush=True)
+                diff = torch.abs(result - ppresult)
+                max_diff = diff.max().item()
+                mean_diff = diff.mean().item()
+                print(f"Max diff: {max_diff:.2e}, Mean diff: {mean_diff:.2e}", flush=True)
 
-                    # Use slightly relaxed tolerance for stride>1 to account for numerical precision
-                    # differences from distributed computation order
-                    tolerance = 1e-5 if stride > 1 else 1e-6
-                    if not torch.allclose(result, ppresult, atol=tolerance):
-                        print("in kernel size: ", kernel_size, "stride: ", stride, "padding: ", padding, flush=True)
-                        print(f"FAILED with tolerance {tolerance}\n", flush=True)
-                        # Find where the largest differences are
-                        max_diff_idx = torch.argmax(diff)
-                        max_diff_idx = torch.unravel_index(max_diff_idx, diff.shape)
-                        print(f"Largest diff at index {max_diff_idx}: ref={result[max_diff_idx].item():.6f}, patched={ppresult[max_diff_idx].item():.6f}", flush=True)
-                    else:
-                        print(f"{kernel_size} {stride} {padding} end (max_diff={max_diff:.2e}, tol={tolerance:.0e})", flush=True)
+                # Use slightly relaxed tolerance for stride>1 to account for numerical precision
+                # differences from distributed computation order
+                tolerance = 1e-5 if stride > 1 else 1e-6
+                if not torch.allclose(result, ppresult, atol=tolerance):
+                    print("in kernel size: ", kernel_size, "stride: ", stride, "padding: ", padding, flush=True)
+                    print(f"FAILED with tolerance {tolerance}\n", flush=True)
+                    # Find where the largest differences are
+                    max_diff_idx = torch.argmax(diff)
+                    max_diff_idx = torch.unravel_index(max_diff_idx, diff.shape)
+                    print(f"Largest diff at index {max_diff_idx}: ref={result[max_diff_idx].item():.6f}, patched={ppresult[max_diff_idx].item():.6f}", flush=True)
+                else:
+                    print(f"{kernel_size} {stride} {padding} end (max_diff={max_diff:.2e}, tol={tolerance:.0e})", flush=True)
 
     # assert torch.equal(result, ppresult), "two hidden states are not equal"
 
