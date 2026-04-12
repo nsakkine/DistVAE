@@ -91,16 +91,12 @@ class PatchConvMixin:
 
         # Cache patch_index to avoid redundant all_gather calls
         #
-        # Key by (patch_dim, local_patch_size, world_size). This assumes that if this rank's
-        # patch size hasn't changed, then no rank's patch size has changed. This holds true when:
-        # - Processing same-resolution inputs repeatedly (common case: video frames)
-        # - Inputs are padded to be evenly divisible (encoder adds padding)
-        #
-        # Edge case where cache could be stale:
-        # - Processing varying resolutions in same session with uneven splits
-        # - For production use with stable input sizes, this cache is correct and important
-        #   for performance (saves ~0.5s by avoiding all_gather)
-        cache_key = (patch_dim, patch_size, group_world_size)
+        # Key includes full input shape to ensure cache is invalidated when split changes.
+        # This handles the case where this rank's patch_size stays the same but other ranks
+        # change (e.g., global 1000->[500,500] vs 999->[500,499]). Since Patchify hasn't run
+        # yet, all ranks see the same full input shape, making this a safe cache key.
+        # Saves ~0.5s by avoiding all_gather on repeated same-resolution inputs.
+        cache_key = (patch_dim, tuple(input.shape), group_world_size)
 
         if not hasattr(self, '_patch_index_cache'):
             self._patch_index_cache = {}
