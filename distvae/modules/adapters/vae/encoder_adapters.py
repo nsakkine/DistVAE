@@ -188,7 +188,8 @@ class WanEncoderAdapter(nn.Module):
         # Call encoder without return_dict (WanEncoder3d doesn't support it)
         sample = self.encoder(sample, feat_cache=feat_cache, feat_idx=feat_idx)
 
-        sample = self.depatchify(sample)
+        if patchify:
+            sample = self.depatchify(sample)
 
         # Crop to expected dimensions to match what diffusers expects
         # This removes the padding we added above
