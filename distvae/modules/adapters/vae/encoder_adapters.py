@@ -130,10 +130,6 @@ class WanEncoderAdapter(nn.Module):
         original_shape = sample.shape
 
         if patchify:
-            # Add padding to ensure dimensions are divisible by world_size * 2^downsample_count
-            # This follows SGLang's split_for_parallel_encode approach
-            group_world_size = DistributedEnv.get_group_world_size()
-
             # Count number of downsampling operations (stride=2 layers)
             # For Wan VAE, typically 3 downsample layers (8x spatial reduction)
             downsample_count = 3
@@ -144,7 +140,27 @@ class WanEncoderAdapter(nn.Module):
                 # Infer downsample count from scale factor (2^downsample_count = scale)
                 downsample_count = int(math.log2(vae_spatial_scale))
 
-            # Calculate required padding to make the split dimension divisible
+            # Add extra padding to compensate for symmetric Conv2d padding offset
+            #
+            # Background: Original model uses ZeroPad2d(0,1,0,1) (asymmetric, right/bottom only)
+            # but we use Conv2d(padding=1) (symmetric, all sides) for distributed correctness.
+            # This creates a 1-pixel offset on left/top edges at each downsample layer.
+            #
+            # Solution: Add (2^downsample_count - 1) padding before encoding to give room for
+            # cropping away the offset afterward. After downsample_count stride=2 layers,
+            # this padding becomes 1 pixel in latent space, which we can then crop.
+            #
+            # Example: For downsample_count=3 (8x spatial reduction):
+            # - Add 7 pixels padding on all sides in input space
+            # - After 3 stride=2 downsamplings: 7 -> 3 -> 1 -> 1 pixel in latent space
+            # - Crop [1:expected+1] to remove the 1-pixel offset
+            edge_pad = 2**downsample_count - 1
+            # Use replicate mode to avoid grey edges from zero padding
+            sample = F.pad(sample, (edge_pad, edge_pad, edge_pad, edge_pad, 0, 0), mode='replicate')
+
+            # Add padding to ensure dimensions are divisible by world_size * 2^downsample_count
+            # Following SGLang's split_for_parallel_encode approach
+            group_world_size = DistributedEnv.get_group_world_size()
             factor = group_world_size * (2 ** downsample_count)
 
             # Pad along the configured spatial split dimension so patchify/chunking
@@ -153,7 +169,10 @@ class WanEncoderAdapter(nn.Module):
             if patch_dim not in (-2, -1):
                 raise ValueError(f"Unsupported patch_dim for spatial padding: {patch_dim}")
 
-            orig_spatial = original_shape[patch_dim]
+            # Account for edge padding already added
+            current_h = original_shape[-2] + 2 * edge_pad
+            current_w = original_shape[-1] + 2 * edge_pad
+            orig_spatial = current_h if patch_dim == -2 else current_w
             pad_spatial = (factor - orig_spatial % factor) % factor
 
             # F.pad expects (W_left, W_right, H_left, H_right, F_left, F_right) for 5D
@@ -182,9 +201,16 @@ class WanEncoderAdapter(nn.Module):
             expected_h = original_shape[-2] // vae_spatial_scale
             expected_w = original_shape[-1] // vae_spatial_scale
 
-            # Crop if dimensions don't match (due to parallel VAE padding)
-            if sample.shape[-2] != expected_h or sample.shape[-1] != expected_w:
-                sample = sample[..., :expected_h, :expected_w]
+            # Crop to remove symmetric padding offset and parallel VAE padding
+            #
+            # The edge_pad we added before encoding has been downsampled to 1 pixel on all sides.
+            # Crop [1:expected+1] instead of [0:expected] to remove the 1-pixel left/top offset
+            # caused by symmetric Conv2d padding vs the original asymmetric ZeroPad2d padding.
+            #
+            # This also handles any extra padding from parallel VAE (to make dimensions divisible
+            # by world_size * 2^downsample_count).
+            offset = 1  # Remove 1 pixel from left/top due to symmetric padding
+            sample = sample[..., offset:offset+expected_h, offset:offset+expected_w]
 
         return sample
 

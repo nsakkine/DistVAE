@@ -32,39 +32,22 @@ class WanResampleDownAdapter(nn.Module):
         # Adapt the resample layers
         if isinstance(wan_resample.resample, nn.Sequential):
             resample = []
-            # Check if there's a ZeroPad2d before Conv2d (common pattern for stride-2 downsampling)
-            pending_pad = None
             for layer in wan_resample.resample:
                 if isinstance(layer, nn.ZeroPad2d):
-                    # Store padding info to apply to next Conv2d
-                    pending_pad = layer.padding
-                    # Skip the padding layer - PatchConv will handle padding across ranks
+                    # Skip ZeroPad2d layers - we'll use symmetric Conv2d padding instead
+                    # Original model: ZeroPad2d(0,1,0,1) + Conv2d(padding=0, stride=2)
+                    # Distributed: Conv2d(padding=1, stride=2)
+                    #
+                    # This changes from asymmetric (0,1,0,1) to symmetric (1,1,1,1) padding,
+                    # which adds 1 extra pixel on left/top edges. However, this is necessary
+                    # for distributed correctness with PatchConv2d's halo exchange mechanism.
+                    # The extra left/top padding is compensated by:
+                    # 1. Adding edge_pad before encoding (in encoder_adapters.py)
+                    # 2. Cropping with offset after encoding (in encoder_adapters.py)
                     continue
                 elif isinstance(layer, nn.Conv2d):
-                    # If there was a pending ZeroPad2d, we need to adjust the conv
-                    if pending_pad is not None:
-                        # IMPORTANT: Asymmetric padding preservation vs distributed correctness
-                        #
-                        # The original model uses ZeroPad2d with asymmetric padding (e.g., (0,1,0,1))
-                        # for stride-2 downsampling. While padding=(1,1) is NOT semantically equivalent
-                        # to ZeroPad2d(0,1,0,1) in single-GPU inference, we use symmetric padding here
-                        # because it's required for distributed correctness:
-                        #
-                        # 1. PatchConv2d's halo exchange mechanism is designed for symmetric padding
-                        # 2. Applying asymmetric padding locally on each rank interferes with boundary
-                        #    communication between ranks, causing misalignment at boundaries
-                        # 3. Symmetric padding produces correct output dimensions and no visual artifacts
-                        # 4. Preserving exact asymmetric padding causes visible horizontal line artifacts
-                        #
-                        # This is a necessary trade-off: we sacrifice strict single-GPU semantic
-                        # equivalence (one extra column/row of padding on left/top) to achieve
-                        # distributed correctness. In practice, the slight padding difference does
-                        # not cause visual issues, whereas exact asymmetric padding breaks distributed
-                        # boundary handling.
-                        #
-                        # ZeroPad2d.padding is (left, right, top, bottom), typically (0, 1, 0, 1)
-                        layer.padding = (1, 1)
-                        pending_pad = None
+                    # Set symmetric padding for distributed halo exchange compatibility
+                    layer.padding = (1, 1)
                     resample.append(
                         Conv2dAdapter(layer, block_size=conv_block_size, patch_dim=patch_dim)
                     )
