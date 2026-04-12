@@ -93,8 +93,11 @@ class WanEncoderAdapter(nn.Module):
                     WanResampleDownAdapter(down_block, conv_block_size=conv_block_size, patch_dim=patch_dim)
                 )
             elif isinstance(down_block, WanAttentionBlock):
-                # Attention blocks are kept as-is (no spatial splitting needed)
-                down_blocks.append(down_block)
+                # Attention blocks need to see full spatial context, so wrap with adapter
+                from distvae.modules.adapters.layers.attn_adapters import WanAttentionBlockAdapter
+                down_blocks.append(
+                    WanAttentionBlockAdapter(down_block, patch_dim=patch_dim)
+                )
             else:
                 # Unknown block type - keep as-is and log warning
                 import warnings
