@@ -120,30 +120,37 @@ class PatchConv3d(nn.Conv3d, PatchConvMixin):
                     ):
                         conv_res = F.conv3d(input, weight, bias, self.stride,
                                             self.padding, self.dilation, self.groups)
+                    else:
+                        conv_res = F.conv3d(F.pad(input, padding, "constant", 0.0),
+                                            weight, bias, self.stride,
+                                            _triple(0), self.dilation, self.groups)
+
+                # Always apply cropping when halos are present to remove halo regions from output
+                # This prevents rank boundary artifacts for all convolution configurations
+                if halo_width[0] > 0 or halo_width[1] > 0:
+                    if stride_patch_dim > 1:
+                        # For stride > 1, use global position-based cropping
+                        global_start = patch_index[rank_in_group]
+                        global_height = patch_index[-1]
+                        crop_slice = build_crop_slice(
+                            patch_dim, patch_size, halo_width, conv_res.shape[patch_dim], ndim=5,
+                            global_start=global_start,
+                            global_height=global_height,
+                            kernel_size=kernel_size_patch_dim,
+                            padding=padding_patch_dim,
+                            stride=stride_patch_dim,
+                            input_halo_width=halo_width,
+                        )
+                        conv_res = conv_res[tuple(crop_slice)].contiguous()
+                    else:
+                        # For stride=1, use simple halo-based cropping
                         crop_slice = [slice(None)] * 5
                         if halo_width[1] == 0:
                             crop_slice[patch_dim] = slice(halo_width[0], None)
                         else:
                             crop_slice[patch_dim] = slice(halo_width[0], -halo_width[1])
                         conv_res = conv_res[tuple(crop_slice)].contiguous()
-                    else:
-                        conv_res = F.conv3d(F.pad(input, padding, "constant", 0.0),
-                                            weight, bias, self.stride,
-                                            _triple(0), self.dilation, self.groups)
-                        # For stride > 1, use global position-based cropping
-                        if stride_patch_dim > 1:
-                            global_start = patch_index[rank_in_group]
-                            global_height = patch_index[-1]
-                            crop_slice = build_crop_slice(
-                                patch_dim, patch_size, halo_width, conv_res.shape[patch_dim], ndim=5,
-                                global_start=global_start,
-                                global_height=global_height,
-                                kernel_size=kernel_size_patch_dim,
-                                padding=padding_patch_dim,
-                                stride=stride_patch_dim,
-                                input_halo_width=halo_width,
-                            )
-                            conv_res = conv_res[tuple(crop_slice)].contiguous()
+
                 return conv_res
             # Chunked path: pad input, split into overlapping chunks along F, H, W; conv each chunk with padding=0; concat outputs; crop to this rank's patch.
             else:
