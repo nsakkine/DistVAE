@@ -67,7 +67,9 @@ class MockWanEncoder(nn.Module):
         # conv_out: 512->16 (latent space)
         self.conv_out = WanCausalConv3d(hidden_channels * 8, out_channels, kernel_size=3, padding=1)
 
-    def forward(self, x):
+    def forward(self, x, _feat_cache=None, _feat_idx=0):
+        # _feat_cache and _feat_idx are used by real Wan VAE for temporal consistency,
+        # but we ignore them in this simplified mock
         h = self.conv_in(x)
         for block in self.down_blocks:
             h = block(h)
@@ -106,7 +108,10 @@ def worker(
     encoder = encoder.to(device)
     encoder.eval()
 
-    # Create distributed adapter
+    # Save state dict before patching to create clean reference encoder
+    encoder_state_dict = encoder.state_dict()
+
+    # Create distributed adapter (patches encoder in-place)
     from distvae.modules.adapters.vae.encoder_adapters import WanEncoderAdapter
 
     # Mock VAE config
@@ -129,10 +134,17 @@ def worker(
     x_full = torch.randn(n, c, f, height, width, device=device, dtype=torch.float32)
 
     with torch.no_grad():
-        # Reference: full encoder on rank 0
-        y_ref = encoder(x_full) if rank == 0 else None
+        # Reference: create unwrapped encoder on rank 0 only (no distributed collectives)
+        if rank == 0:
+            encoder_ref = MockWanEncoder(in_channels=3, out_channels=16, hidden_channels=32)
+            encoder_ref.load_state_dict(encoder_state_dict)
+            encoder_ref = encoder_ref.to(device)
+            encoder_ref.eval()
+            y_ref = encoder_ref(x_full)
+        else:
+            y_ref = None
 
-        # Distributed: run through adapter
+        # Distributed: run through adapter on all ranks
         y_dist = encoder_adapter(x_full)
 
     success = torch.ones(1, dtype=torch.int64, device=device)
@@ -203,6 +215,21 @@ def test_vae_encoder_larger_input(master_port, seed=42):
     height, width = 128, 128  # After 3x stride=2: 128 -> 64 -> 32 -> 16
     _run_one(
         world_size=2,
+        height=height,
+        width=width,
+        seed=seed,
+        master_port=master_port,
+    )
+
+
+@pytest.mark.gloo
+@pytest.mark.parametrize("world_size", [2, 4])
+def test_vae_encoder_non_divisible_sizes(world_size, master_port, seed=42):
+    """WanEncoderAdapter with sizes NOT divisible by downsampling factor (8)."""
+    # Use sizes not divisible by 8 to test padding/cropping logic
+    height, width = 62, 65  # Not divisible by 8, will be padded then cropped
+    _run_one(
+        world_size=world_size,
         height=height,
         width=width,
         seed=seed,
