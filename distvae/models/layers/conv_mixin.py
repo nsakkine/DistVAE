@@ -116,8 +116,8 @@ class PatchConvMixin:
 
             patch_index = calc_patch_index(patch_list)
             # cache for all patch_size keys
-            for size in set(patch_list):
-                size_cache_key = (patch_dim, size.item(), group_world_size)
+            for size in set(p.item() for p in patch_list):
+                size_cache_key = (patch_dim, size, group_world_size)
                 self._patch_index_cache[size_cache_key] = patch_index
             
         halo_width = calc_halo_width(
