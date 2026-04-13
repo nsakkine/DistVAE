@@ -101,18 +101,6 @@ class WanResidualDownBlockAdapter(nn.Module):
                 self.down_block.downsampler = WanResampleDownAdapter(
                     wan_residual_down_block.downsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
                 )
-        elif hasattr(wan_residual_down_block, "downsamplers") and wan_residual_down_block.downsamplers is not None:
-            # Plural form (some other models)
-            adapted_downsamplers = []
-            for downsampler in wan_residual_down_block.downsamplers:
-                if isinstance(downsampler, WanResample):
-                    adapted_downsamplers.append(
-                        WanResampleDownAdapter(downsampler, conv_block_size=conv_block_size, patch_dim=patch_dim)
-                    )
-                else:
-                    # Keep other types as-is
-                    adapted_downsamplers.append(downsampler)
-            self.down_block.downsamplers = nn.ModuleList(adapted_downsamplers)
-
+        
     def forward(self, hidden_states, feat_cache=None, feat_idx=[0]):
         return self.down_block(hidden_states, feat_cache=feat_cache, feat_idx=feat_idx)

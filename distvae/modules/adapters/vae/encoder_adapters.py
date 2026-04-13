@@ -17,6 +17,13 @@ from distvae.modules.adapters.layers.attn_adapters import WanAttentionBlockAdapt
 from distvae.modules.patch_utils import Patchify, DePatchify
 from distvae.utils import DistributedEnv
 
+from diffusers.models.autoencoders.autoencoder_kl_wan import (
+    WanResidualDownBlock,
+    WanResidualBlock,
+    WanResample,
+    WanAttentionBlock,
+)
+
 class WanEncoderAdapter(nn.Module):
     """
     Parallel adapter for Wan VAE encoder using distributed parallelism with overlap.
@@ -68,14 +75,6 @@ class WanEncoderAdapter(nn.Module):
         )
 
         # Patch the down_blocks
-        # Import all possible block types
-        from diffusers.models.autoencoders.autoencoder_kl_wan import (
-            WanResidualDownBlock,
-            WanResidualBlock,
-            WanResample,
-            WanAttentionBlock,
-        )
-
         down_blocks = []
         for i, down_block in enumerate(encoder.down_blocks):
             if isinstance(down_block, WanResidualDownBlock):
