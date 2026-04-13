@@ -162,7 +162,6 @@ def build_crop_slice(
     out_len: int,
     ndim: int,
     global_start: int = None,
-    global_height: int = None,
     kernel_size: int = None,
     padding: int = None,
     stride: int = None,
@@ -170,7 +169,7 @@ def build_crop_slice(
 ) -> tuple:
     """Build a tuple of slices to crop conv output to the valid patch region.
 
-    When global position information is provided (global_start, global_height, etc.),
+    When global position information is provided (global_start, etc.),
     computes exact output indices based on global coordinates to ensure alignment
     across ranks (critical for stride > 1). Otherwise falls back to simple halo-based crop.
 
@@ -181,7 +180,6 @@ def build_crop_slice(
         out_len: Length of the full conv output along patch_dim.
         ndim: Number of dimensions (4 for 2D conv, 5 for 3D).
         global_start: Global start index of this rank's patch (for stride alignment).
-        global_height: Total global height (for output bounds check).
         kernel_size: Kernel size along patch_dim (for exact output calculation).
         padding: Padding along patch_dim.
         stride: Stride along patch_dim.
@@ -191,11 +189,11 @@ def build_crop_slice(
         Tuple of slices suitable for indexing the conv output tensor.
     """
     # If we have global position info, compute exact output range
-    if (global_start is not None and global_height is not None and
-        kernel_size is not None and padding is not None and stride is not None and
+    if (global_start is not None and kernel_size is not None and 
+        padding is not None and stride is not None and
         input_halo_width is not None and stride > 1):
         import math
-        # Compute valid output indices based on global coordinates (SGLang approach)
+        # Compute valid output indices based on global coordinates
         # The halo region starts at global_start - input_halo_width[0]
         halo_start = global_start - input_halo_width[0]
 

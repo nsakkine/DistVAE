@@ -110,11 +110,9 @@ class PatchConv2d(nn.Conv2d, PatchConvMixin):
                     if stride_patch_dim > 1:
                         # For stride > 1, use global position-based cropping
                         global_start = patch_index[rank_in_group]
-                        global_height = patch_index[-1]
                         crop_slice = build_crop_slice(
                             patch_dim, patch_size, halo_width, conv_res.shape[patch_dim], ndim=4,
                             global_start=global_start,
-                            global_height=global_height,
                             kernel_size=kernel_size_patch_dim,
                             padding=padding_patch_dim,
                             stride=stride_patch_dim,
@@ -203,13 +201,11 @@ class PatchConv2d(nn.Conv2d, PatchConvMixin):
                 outputs = torch.cat(outputs, dim=-2)
                 # Get global position for precise output cropping when stride > 1
                 global_start = patch_index[rank_in_group]
-                global_height = patch_index[-1]  # Total height across all ranks
                 # Note: patch_size here is the LOCAL patch size (before halo exchange)
                 # but after stride_shift trimming
                 crop_slice = build_crop_slice(
                     patch_dim, patch_size, halo_width, outputs.shape[patch_dim], ndim=4,
                     global_start=global_start,
-                    global_height=global_height,
                     kernel_size=kernel_size_patch_dim,
                     padding=padding_patch_dim,
                     stride=stride_patch_dim,

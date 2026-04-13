@@ -159,7 +159,6 @@ class WanEncoderAdapter(nn.Module):
             sample = F.pad(sample, (edge_pad, edge_pad, edge_pad, edge_pad, 0, 0), mode='replicate')
 
             # Add padding to ensure dimensions are divisible by world_size * 2^downsample_count
-            # Following SGLang's split_for_parallel_encode approach
             group_world_size = DistributedEnv.get_group_world_size()
             factor = group_world_size * (2 ** downsample_count)
 
