@@ -190,12 +190,11 @@ class WanEncoderAdapter(nn.Module):
         if patchify:
             sample = self.depatchify(sample)
 
-        # Crop to expected dimensions to match what diffusers expects
-        # This removes the padding we added above
-        if patchify and self.vae_config is not None:
+            # Crop to expected dimensions to match what diffusers expects
+            # This removes the padding we added above (both edge_pad and pad_spatial)
             # Calculate expected output dimensions based on VAE scaling
-            vae_spatial_scale = getattr(self.vae_config, 'scaling_factor', 8)
-            if hasattr(self.vae_config, 'vae_scale_factor_spatial'):
+            vae_spatial_scale = getattr(self.vae_config, 'scaling_factor', 8) if self.vae_config is not None else 8
+            if self.vae_config is not None and hasattr(self.vae_config, 'vae_scale_factor_spatial'):
                 vae_spatial_scale = self.vae_config.vae_scale_factor_spatial
 
             expected_h = original_shape[-2] // vae_spatial_scale
