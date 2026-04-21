@@ -40,13 +40,14 @@ def calc_patch_index(patch_list: List[Tensor]):
         index of patch i; height_index[-1] is the total length. The first element
         is always 0.
     """
-    height_index = []
-    cur = 0
-    for t in patch_list:
-        height_index.append(cur)
-        cur += t.item()
-    height_index.append(cur)
-    return height_index
+    patch_list = torch.cat(patch_list, dim=0)
+    return torch.cat(
+        [
+            torch.zeros(1, device=patch_list.device, dtype=patch_list.dtype),
+            torch.cumsum(patch_list, dim=0),
+        ],
+        dim=0,
+    ).cpu().tolist()
 
 
 def calc_bottom_halo_width(rank, height_index, kernel_size, padding=0, stride=1):
@@ -241,6 +242,7 @@ def exchange_halo(
     next_top_halo_width: int,
     group_world_size: int,
     rank_in_group: int,
+    halo_buffer: dict = None,
 ) -> Tensor:
     """Exchange halo regions with previous and next ranks; return extended local tensor.
 
@@ -277,9 +279,19 @@ def exchange_halo(
         )
         recv_shape = list(input.shape)
         recv_shape[patch_dim] = halo_width[0]
-        top_halo_recv = torch.empty(
-            recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
-        )
+        if halo_buffer is None:
+            top_halo_recv = torch.empty(
+                recv_shape, dtype=input.dtype, device=input.device
+            )
+        else:
+            key = ("top_recv", tuple(recv_shape), input.dtype, input.device)
+            if key in halo_buffer:
+                top_halo_recv = halo_buffer[key]
+            else:
+                top_halo_recv = torch.empty(
+                    recv_shape, dtype=input.dtype, device=input.device
+                )
+                halo_buffer[key] = top_halo_recv
         global_rank_of_prev = DistributedEnv.get_global_rank_from_group_rank(rank_in_group - 1)
         dist.recv(top_halo_recv, global_rank_of_prev, group=DistributedEnv.get_vae_group())
     if prev_bottom_halo_width > 0:
@@ -297,9 +309,19 @@ def exchange_halo(
         )
         recv_shape = list(input.shape)
         recv_shape[patch_dim] = halo_width[1]
-        bottom_halo_recv = torch.empty(
-            recv_shape, dtype=input.dtype, device=DistributedEnv.get_device()
-        )
+        if halo_buffer is None:
+            bottom_halo_recv = torch.empty(
+                recv_shape, dtype=input.dtype, device=input.device
+            )
+        else:
+            key = ("bottom_recv", tuple(recv_shape), input.dtype, input.device)
+            if key in halo_buffer:
+                bottom_halo_recv = halo_buffer[key]
+            else:
+                bottom_halo_recv = torch.empty(
+                    recv_shape, dtype=input.dtype, device=input.device
+                )
+                halo_buffer[key] = bottom_halo_recv
         if global_rank_of_next is None:
             global_rank_of_next = DistributedEnv.get_global_rank_from_group_rank(rank_in_group + 1)
         dist.recv(

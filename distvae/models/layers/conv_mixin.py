@@ -59,7 +59,32 @@ class PatchConvMixin:
             spatial_sizes[i] <= block_size[i] for i in range(len(spatial_sizes))
         )
 
-    def _multi_rank_metadata_and_halo(self, input: Tensor):
+    def _uniform_patch_index(self, t: torch.Tensor, group_world_size: int):
+        """Calculate the patch index for a uniform patch.
+
+        Args:
+            patch_dim_size: The size of the patch dimension
+            group_world_size: The world size of the group
+
+        Returns:
+            The patch index
+        """
+        patch_dim = self.patch_dim if self.patch_dim >= 0 else t.ndim + self.patch_dim
+        patch_list = [
+            torch.tensor(
+                [t.shape[patch_dim]],
+                dtype=torch.int64,
+                device=t.device
+            ) for _ in range(group_world_size)
+        ]
+        return calc_patch_index(patch_list)
+
+    def _multi_rank_metadata_and_halo(
+        self,
+        input: Tensor,
+        use_uniform_patch: bool = False,
+        halo_buffer: dict = None
+    ):
         """All_gather patch sizes, compute patch_index and halo_width, exchange halos; return extended input and metadata.
 
         All-gathers each rank's patch size along the patch dimension, builds
@@ -88,20 +113,31 @@ class PatchConvMixin:
             if isinstance(self.stride, tuple)
             else self.stride
         )
-        patch_list = [
-            torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device())
-            for _ in range(group_world_size)
-        ]
-        dist.all_gather(
-            patch_list,
-            torch.tensor(
-                [input.shape[patch_dim]],
-                dtype=torch.int64,
-                device=DistributedEnv.get_device(),
-            ),
-            group=DistributedEnv.get_vae_group(),
-        )
-        patch_index = calc_patch_index(patch_list)
+        if use_uniform_patch:
+            if halo_buffer is None:
+                patch_index = self._uniform_patch_index(input, group_world_size)
+            else:
+                key = ("patch_index", input.shape[patch_dim], torch.int64, input.device)
+                if key in halo_buffer:
+                    patch_index = halo_buffer[key]
+                else:
+                    patch_index = self._uniform_patch_index(input, group_world_size)
+                    halo_buffer[key] = patch_index
+        else:
+            patch_list = [
+                torch.zeros(1, dtype=torch.int64, device=input.device)
+                for _ in range(group_world_size)
+            ]
+            dist.all_gather(
+                patch_list,
+                torch.tensor(
+                    [input.shape[patch_dim]],
+                    dtype=torch.int64,
+                    device=input.device,
+                ),
+                group=DistributedEnv.get_vae_group(),
+            )
+            patch_index = calc_patch_index(patch_list)
         halo_width = calc_halo_width(
             rank_in_group,
             patch_index,
@@ -141,6 +177,7 @@ class PatchConvMixin:
             next_top_halo_width,
             group_world_size,
             rank_in_group,
+            halo_buffer,
         )
         return (
             input,

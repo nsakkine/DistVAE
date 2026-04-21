@@ -104,6 +104,7 @@ class WanDecoderAdapter(nn.Module):
         decoder: Decoder, 
         vae_group: ProcessGroup = None,
         *,
+        use_uniform_patch: bool = True,
         use_profiler: bool = False,
         verbose: bool = False,
         conv_block_size = 0,
@@ -117,10 +118,10 @@ class WanDecoderAdapter(nn.Module):
         DistributedEnv.set_patch_dim(patch_dim)
         self.decoder = decoder
         self.decoder.conv_in = WanCausalConv3dAdapter(
-            decoder.conv_in, block_size=conv_block_size, patch_dim=patch_dim
+            decoder.conv_in, block_size=conv_block_size, patch_dim=patch_dim, use_uniform_patch=use_uniform_patch
         )
         self.decoder.mid_block = WanMidBlockAdapter(
-            decoder.mid_block, conv_block_size=conv_block_size, patch_dim=patch_dim
+            decoder.mid_block, conv_block_size=conv_block_size, patch_dim=patch_dim, use_uniform_patch=use_uniform_patch
         )
         up_blocks = []
         for up_block in decoder.up_blocks:
@@ -129,7 +130,8 @@ class WanDecoderAdapter(nn.Module):
                     WanUpBlockAdapter(
                         up_block,
                         conv_block_size=conv_block_size,
-                        patch_dim=patch_dim
+                        patch_dim=patch_dim,
+                        use_uniform_patch=use_uniform_patch
                     )
                 )
             elif isinstance(up_block, WanResidualUpBlock):
@@ -137,15 +139,17 @@ class WanDecoderAdapter(nn.Module):
                     WanResidualUpBlockAdapter(
                         up_block,
                         conv_block_size=conv_block_size,
-                        patch_dim=patch_dim
+                        patch_dim=patch_dim,
+                        use_uniform_patch=use_uniform_patch
                     )
                 )                
         self.decoder.up_blocks = nn.ModuleList(up_blocks)
         self.decoder.conv_out = WanCausalConv3dAdapter(
-            decoder.conv_out, block_size=conv_block_size, patch_dim=patch_dim
+            decoder.conv_out, block_size=conv_block_size, patch_dim=patch_dim, use_uniform_patch=use_uniform_patch
         )
-        self.patchify = Patchify(patch_dim=patch_dim)
-        self.depatchify = DePatchify(patch_dim=patch_dim)
+        self.patchify = Patchify(patch_dim=patch_dim, use_uniform_patch=use_uniform_patch)
+        self.depatchify = DePatchify(patch_dim=patch_dim, use_uniform_patch=use_uniform_patch)
+        self.use_uniform_patch = use_uniform_patch
         self.use_profiler = use_profiler
         self.verbose = verbose
         self.vae_group = vae_group
@@ -158,11 +162,24 @@ class WanDecoderAdapter(nn.Module):
         first_chunk: bool = False,
         patchify: bool = True
     ):
+        if self.use_uniform_patch and not patchify:
+            raise ValueError("WanDecoderAdapter does not support use_uniform_patch for already patchified inputs.")
+
+        if self.use_uniform_patch:
+            patch_dim = self.patch_dim if self.patch_dim >= 0 else sample.ndim + self.patch_dim
+            patch_dim_size = sample.shape[patch_dim]
+
         if patchify:
             sample = self.patchify(sample)
-        sample = self.decoder(sample, feat_cache=feat_cache, feat_idx=feat_idx, first_chunk=first_chunk)
-        sample = self.depatchify(sample)
-        return sample
+        output = self.decoder(sample, feat_cache=feat_cache, feat_idx=feat_idx, first_chunk=first_chunk)
+        output = self.depatchify(output)
+
+        if self.use_uniform_patch:
+            group_world_size = DistributedEnv.get_group_world_size()
+            upsampling_factor = output.shape[patch_dim] // (sample.shape[patch_dim] * group_world_size)
+            output = output.narrow(patch_dim, 0, patch_dim_size * upsampling_factor)
+
+        return output
 
     def forward(
         self,

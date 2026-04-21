@@ -52,6 +52,7 @@ class WanResampleAdapter(nn.Module):
         wan_resample: WanResample,
         conv_block_size = 0,
         patch_dim: int = -2,
+        use_uniform_patch: bool = False,
     ):
         super().__init__()
         assert isinstance(wan_resample, WanResample), (
@@ -62,14 +63,22 @@ class WanResampleAdapter(nn.Module):
             raise ValueError("WanResampleAdapter does not support patch_dim F (-3); use H (-2) or W (-1).")
         if hasattr(wan_resample, "time_conv"):
             wan_resample.time_conv = WanCausalConv3dAdapter(
-                wan_resample.time_conv, block_size=conv_block_size, patch_dim=patch_dim
+                wan_resample.time_conv,
+                block_size=conv_block_size,
+                patch_dim=patch_dim,
+                use_uniform_patch=use_uniform_patch
         )
         if isinstance(wan_resample.resample, nn.Sequential):
             resample = []
             for layer in wan_resample.resample:
                 if isinstance(layer, nn.Conv2d):
                     resample.append(
-                        Conv2dAdapter(layer, block_size=conv_block_size, patch_dim=patch_dim)
+                        Conv2dAdapter(
+                            layer,
+                            block_size=conv_block_size,
+                            patch_dim=patch_dim,
+                            use_uniform_patch=use_uniform_patch
+                        )
                     )
                 else:
                     resample.append(layer)
@@ -87,6 +96,7 @@ class WanResidualUpBlockAdapter(nn.Module):
         wan_residual_up_block: WanResidualUpBlock,
         conv_block_size = 0,
         patch_dim: int = -2,
+        use_uniform_patch: bool = False,
     ):
         super().__init__()
         assert isinstance(wan_residual_up_block, WanResidualUpBlock), (
@@ -95,14 +105,20 @@ class WanResidualUpBlockAdapter(nn.Module):
         self.residual_up_block = wan_residual_up_block
         self.residual_up_block.resnets = nn.ModuleList([
             WanResidualBlockAdapter(
-                resnet, conv_block_size=conv_block_size, patch_dim=patch_dim)
-                for resnet in wan_residual_up_block.resnets
+                resnet,
+                conv_block_size=conv_block_size,
+                patch_dim=patch_dim,
+                use_uniform_patch=use_uniform_patch
+            ) for resnet in wan_residual_up_block.resnets
         ])
         if hasattr(wan_residual_up_block, "upsamplers"):
             if wan_residual_up_block.upsamplers is not None:
                 self.residual_up_block.upsamplers = nn.ModuleList([
                     WanResampleAdapter(
-                        upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                        upsampler,
+                        conv_block_size=conv_block_size,
+                        patch_dim=patch_dim,
+                        use_uniform_patch=use_uniform_patch
                     ) if isinstance(upsampler, WanResample) else upsampler
                     for upsampler in wan_residual_up_block.upsamplers
                 ])
@@ -111,7 +127,10 @@ class WanResidualUpBlockAdapter(nn.Module):
                 upsampler = wan_residual_up_block.upsampler
                 if isinstance(upsampler, WanResample):
                     self.residual_up_block.upsampler = WanResampleAdapter(
-                        upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                        upsampler,
+                        conv_block_size=conv_block_size,
+                        patch_dim=patch_dim,
+                        use_uniform_patch=use_uniform_patch,
                     )
 
     def forward(self, x, feat_cache=None, feat_idx=[0], first_chunk=False):
@@ -124,6 +143,7 @@ class WanUpBlockAdapter(nn.Module):
         wan_up_block: WanUpBlock,
         conv_block_size = 0,
         patch_dim: int = -2,
+        use_uniform_patch: bool = False,
     ):
         super().__init__()
         assert isinstance(wan_up_block, WanUpBlock), (
@@ -132,14 +152,20 @@ class WanUpBlockAdapter(nn.Module):
         self.up_block = wan_up_block
         self.up_block.resnets = nn.ModuleList([
             WanResidualBlockAdapter(
-                resnet, conv_block_size=conv_block_size, patch_dim=patch_dim)
-                for resnet in wan_up_block.resnets
+                resnet,
+                conv_block_size=conv_block_size,
+                patch_dim=patch_dim,
+                use_uniform_patch=use_uniform_patch,
+            ) for resnet in wan_up_block.resnets
         ])
         if hasattr(wan_up_block, "upsamplers"):
             if wan_up_block.upsamplers is not None:
                 self.up_block.upsamplers = nn.ModuleList([
                     WanResampleAdapter(
-                        upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                        upsampler,
+                        conv_block_size=conv_block_size,
+                        patch_dim=patch_dim,
+                        use_uniform_patch=use_uniform_patch,
                     ) if isinstance(upsampler, WanResample) else upsampler
                     for upsampler in wan_up_block.upsamplers
                 ])
@@ -148,7 +174,10 @@ class WanUpBlockAdapter(nn.Module):
                 upsampler = wan_up_block.upsampler
                 if isinstance(upsampler, WanResample):
                     self.up_block.upsampler = WanResampleAdapter(
-                        upsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                        upsampler,
+                        conv_block_size=conv_block_size,
+                        patch_dim=patch_dim,
+                        use_uniform_patch=use_uniform_patch,
                     )
 
     def forward(self, x, feat_cache=None, feat_idx=[0], first_chunk=False):
