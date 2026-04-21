@@ -59,6 +59,25 @@ class PatchConvMixin:
             spatial_sizes[i] <= block_size[i] for i in range(len(spatial_sizes))
         )
 
+    def _uniform_patch_index(self, patch_dim_size: int, group_world_size: int):
+        """Calculate the patch index for a uniform patch.
+
+        Args:
+            patch_dim_size: The size of the patch dimension
+            group_world_size: The world size of the group
+
+        Returns:
+            The patch index
+        """
+        patch_list = [
+            torch.tensor(
+                [patch_dim_size],
+                dtype=torch.int64,
+                device=DistributedEnv.get_device()
+            ) for _ in range(group_world_size)
+        ]
+        return calc_patch_index(patch_list)
+
     def _multi_rank_metadata_and_halo(
         self,
         input: Tensor,
@@ -94,25 +113,14 @@ class PatchConvMixin:
             else self.stride
         )
         if use_uniform_patch:
-
-            def _patch_index(patch_dim_size: int):
-                patch_list = [
-                    torch.tensor(
-                        [patch_dim_size],
-                        dtype=torch.int64,
-                        device=DistributedEnv.get_device()
-                    ) for _ in range(group_world_size)
-                ]
-                return calc_patch_index(patch_list)
-
             if halo_buffer is None:
-                patch_index = _patch_index(input.shape[patch_dim])
+                patch_index = self._uniform_patch_index(input.shape[patch_dim], group_world_size)
             else:
                 key = ("patch_index", input.shape[patch_dim], torch.int64, DistributedEnv.get_device())
                 if key in halo_buffer:
                     patch_index = halo_buffer[key]
                 else:
-                    patch_index = _patch_index(input.shape[patch_dim])
+                    patch_index = self._uniform_patch_index(input.shape[patch_dim], group_world_size)
                     halo_buffer[key] = patch_index
         else:
             patch_list = [
