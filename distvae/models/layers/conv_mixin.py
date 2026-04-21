@@ -95,7 +95,7 @@ class PatchConvMixin:
         )
         if use_uniform_patch:
 
-            def _patch_index(patch_dim_size: int)
+            def _patch_index(patch_dim_size: int):
                 patch_list = [
                     torch.tensor(
                         [patch_dim_size],
