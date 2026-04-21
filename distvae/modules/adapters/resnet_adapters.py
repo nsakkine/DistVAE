@@ -55,6 +55,7 @@ class WanResidualBlockAdapter(nn.Module):
         wan_residual_block: WanResidualBlock,
         conv_block_size = 0,
         patch_dim: int = -2,
+        use_uniform_patch: bool = False,
     ):
         super().__init__()
         assert isinstance(wan_residual_block, WanResidualBlock), (
@@ -62,10 +63,16 @@ class WanResidualBlockAdapter(nn.Module):
         )
         self.residual_block = wan_residual_block
         self.residual_block.conv1 = WanCausalConv3dAdapter(
-            wan_residual_block.conv1, block_size=conv_block_size, patch_dim=patch_dim
+            wan_residual_block.conv1,
+            block_size=conv_block_size,
+            patch_dim=patch_dim,
+            use_uniform_patch=use_uniform_patch
         )
         self.residual_block.conv2 = WanCausalConv3dAdapter(
-            wan_residual_block.conv2, block_size=conv_block_size, patch_dim=patch_dim
+            wan_residual_block.conv2,
+            block_size=conv_block_size,
+            patch_dim=patch_dim,
+            use_uniform_patch=use_uniform_patch
         )
         # Adapt conv_shortcut if it's not nn.Identity
         if not isinstance(wan_residual_block.conv_shortcut, nn.Identity):
