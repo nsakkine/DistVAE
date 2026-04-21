@@ -20,6 +20,7 @@ class Patchify(nn.Module):
             patch_dim_size = hidden_state.shape[patch_dim]
             pad_size = 2 * [0] * hidden_state.ndim
             # remember that torch.pad operates on the last dimension first
+            # pad_size for patch_dim is the number of elements to pad to the next multiple of group_world_size
             pad_size[2 * (hidden_state.ndim - patch_dim - 1) + 1] = (
                 self.group_world_size - patch_dim_size % self.group_world_size
             ) % self.group_world_size

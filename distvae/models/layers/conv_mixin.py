@@ -94,28 +94,25 @@ class PatchConvMixin:
             else self.stride
         )
         if use_uniform_patch:
-            if halo_buffer is None:
+
+            def _patch_index(patch_dim_size: int)
                 patch_list = [
                     torch.tensor(
-                        [input.shape[patch_dim]],
+                        [patch_dim_size],
                         dtype=torch.int64,
                         device=DistributedEnv.get_device()
                     ) for _ in range(group_world_size)
                 ]
-                patch_index = calc_patch_index(patch_list)
+                return calc_patch_index(patch_list)
+
+            if halo_buffer is None:
+                patch_index = _patch_index(input.shape[patch_dim])
             else:
                 key = ("patch_index", input.shape[patch_dim], torch.int64, DistributedEnv.get_device())
                 if key in halo_buffer:
                     patch_index = halo_buffer[key]
                 else:
-                    patch_list = [
-                        torch.tensor(
-                            [input.shape[patch_dim]],
-                            dtype=torch.int64,
-                            device=DistributedEnv.get_device()
-                        ) for _ in range(group_world_size)
-                    ]
-                    patch_index = calc_patch_index(patch_list)
+                    patch_index = _patch_index(input.shape[patch_dim])
                     halo_buffer[key] = patch_index
         else:
             patch_list = [

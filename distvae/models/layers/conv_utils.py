@@ -48,13 +48,6 @@ def calc_patch_index(patch_list: List[Tensor]):
         ],
         dim=0,
     ).cpu().tolist()
-#    height_index = []
-#    cur = 0
-#    for t in patch_list:
-#        height_index.append(cur)
-#        cur += t.item()
-#    height_index.append(cur)
-#    return height_index
 
 
 def calc_bottom_halo_width(rank, height_index, kernel_size, padding=0, stride=1):
