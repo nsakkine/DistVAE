@@ -42,17 +42,25 @@ class DePatchify(nn.Module):
         patch_dim = self.patch_dim if self.patch_dim >= 0 else patch_hidden_state.ndim + self.patch_dim
         if self.use_uniform_patch:
             patch_size_list = [
-                torch.tensor([patch_hidden_state.shape[patch_dim]], dtype=torch.int64, device=DistributedEnv.get_device())
+                torch.tensor(
+                    [patch_hidden_state.shape[patch_dim]],
+                    dtype=torch.int64,
+                    device=patch_hidden_state.device
+                )
                 for _ in range(self.group_world_size)
             ]
         else:
             patch_size_list = [
-                torch.empty([1], dtype=torch.int64, device=DistributedEnv.get_device())
+                torch.empty([1], dtype=torch.int64, device=patch_hidden_state.device)
                 for _ in range(self.group_world_size)
             ]
             dist.all_gather(
                 patch_size_list,
-                torch.tensor([patch_hidden_state.shape[patch_dim]], dtype=torch.int64, device=DistributedEnv.get_device()),
+                torch.tensor(
+                    [patch_hidden_state.shape[patch_dim]],
+                    dtype=torch.int64,
+                    device=patch_hidden_state.device
+                ),
                 group=DistributedEnv.get_vae_group()
             )
         hidden_state_shape = list(patch_hidden_state.shape)
@@ -60,7 +68,11 @@ class DePatchify(nn.Module):
         for i in range(self.group_world_size):
             hidden_state_shape[patch_dim] = patch_size_list[i].item()
             patch_hidden_state_list.append(
-                torch.empty(hidden_state_shape, dtype=patch_hidden_state.dtype, device=DistributedEnv.get_device())
+                torch.empty(
+                    hidden_state_shape,
+                    dtype=patch_hidden_state.dtype,
+                    device=patch_hidden_state.device
+                )
             )
         dist.all_gather(
             patch_hidden_state_list,

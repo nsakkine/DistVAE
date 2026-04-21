@@ -59,7 +59,7 @@ class PatchConvMixin:
             spatial_sizes[i] <= block_size[i] for i in range(len(spatial_sizes))
         )
 
-    def _uniform_patch_index(self, patch_dim_size: int, group_world_size: int):
+    def _uniform_patch_index(self, t: torch.Tensor, group_world_size: int):
         """Calculate the patch index for a uniform patch.
 
         Args:
@@ -69,11 +69,12 @@ class PatchConvMixin:
         Returns:
             The patch index
         """
+        patch_dim = self.patch_dim if self.patch_dim >= 0 else t.ndim + self.patch_dim
         patch_list = [
             torch.tensor(
-                [patch_dim_size],
+                [t.shape[patch_dim]],
                 dtype=torch.int64,
-                device=DistributedEnv.get_device()
+                device=t.device
             ) for _ in range(group_world_size)
         ]
         return calc_patch_index(patch_list)
@@ -114,17 +115,17 @@ class PatchConvMixin:
         )
         if use_uniform_patch:
             if halo_buffer is None:
-                patch_index = self._uniform_patch_index(input.shape[patch_dim], group_world_size)
+                patch_index = self._uniform_patch_index(input, group_world_size)
             else:
-                key = ("patch_index", input.shape[patch_dim], torch.int64, DistributedEnv.get_device())
+                key = ("patch_index", input.shape[patch_dim], torch.int64, input.device)
                 if key in halo_buffer:
                     patch_index = halo_buffer[key]
                 else:
-                    patch_index = self._uniform_patch_index(input.shape[patch_dim], group_world_size)
+                    patch_index = self._uniform_patch_index(input, group_world_size)
                     halo_buffer[key] = patch_index
         else:
             patch_list = [
-                torch.zeros(1, dtype=torch.int64, device=DistributedEnv.get_device())
+                torch.zeros(1, dtype=torch.int64, device=input.device)
                 for _ in range(group_world_size)
             ]
             dist.all_gather(
@@ -132,7 +133,7 @@ class PatchConvMixin:
                 torch.tensor(
                     [input.shape[patch_dim]],
                     dtype=torch.int64,
-                    device=DistributedEnv.get_device(),
+                    device=input.device,
                 ),
                 group=DistributedEnv.get_vae_group(),
             )
