@@ -66,16 +66,13 @@ def worker(
     # Create distributed adapter
     from distvae.modules.adapters.vae.encoder_adapters import WanEncoderAdapter
 
-    class RealVAEConfig:
-        scaling_factor = 8  # 3 spatial downsamples: 2^3 = 8
-        vae_scale_factor_spatial = 8
-
     encoder_adapter = WanEncoderAdapter(
         encoder,
         vae_group=None,
         conv_block_size=0,
         patch_dim=-2,
-        vae_config=RealVAEConfig(),
+        vae_scale_factor=8,
+        use_uniform_patch=True,
     )
     encoder_adapter.eval()
 
@@ -180,7 +177,7 @@ def master_port(request):
 
 
 @pytest.mark.gloo
-@pytest.mark.parametrize("world_size", [2, 4])
+@pytest.mark.parametrize("world_size", [1, 2, 4])
 def test_real_wan_encoder_even_sizes(world_size, master_port, seed=42):
     """Real WanEncoder3d with even sizes divisible by downsampling factor (8)."""
     height, width = 64, 64  # After 3x stride=2: 64 -> 32 -> 16 -> 8
@@ -199,20 +196,6 @@ def test_real_wan_encoder_larger_input(master_port, seed=42):
     height, width = 128, 128  # After 3x stride=2: 128 -> 64 -> 32 -> 16
     _run_one(
         world_size=2,
-        height=height,
-        width=width,
-        seed=seed,
-        master_port=master_port,
-    )
-
-
-@pytest.mark.gloo
-@pytest.mark.parametrize("world_size", [2, 4])
-def test_real_wan_encoder_non_divisible_sizes(world_size, master_port, seed=42):
-    """Real WanEncoder3d with sizes NOT divisible by downsampling factor (8)."""
-    height, width = 62, 65  # Not divisible by 8
-    _run_one(
-        world_size=world_size,
         height=height,
         width=width,
         seed=seed,

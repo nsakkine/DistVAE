@@ -7,23 +7,30 @@ from distvae.utils import DistributedEnv
 
 
 class Patchify(nn.Module):
-    def __init__(self, patch_dim: int = -2, use_uniform_patch: bool = False):
+    def __init__(
+        self,
+        patch_dim: int = -2,
+        use_uniform_patch: bool = False,
+        scale_factor: int = 1,
+    ):
         super().__init__()
         self.group_world_size = DistributedEnv.get_group_world_size()
         self.rank_in_vae_group = DistributedEnv.get_rank_in_vae_group()
         self.patch_dim = patch_dim
         self.use_uniform_patch = use_uniform_patch
+        self.scale_factor = scale_factor
 
     def forward(self, hidden_state):
         patch_dim = self.patch_dim if self.patch_dim >= 0 else hidden_state.ndim + self.patch_dim
         if self.use_uniform_patch:
+            factor = self.scale_factor * self.group_world_size
             patch_dim_size = hidden_state.shape[patch_dim]
             pad_size = 2 * [0] * hidden_state.ndim
             # remember that torch.pad operates on the last dimension first
-            # pad_size for patch_dim is the number of elements to pad to the next multiple of group_world_size
+            # pad_size for patch_dim is the number of elements to pad to the next multiple of factor
             pad_size[2 * (hidden_state.ndim - patch_dim - 1) + 1] = (
-                self.group_world_size - patch_dim_size % self.group_world_size
-            ) % self.group_world_size
+                factor - patch_dim_size % factor
+            ) % factor
             hidden_state = F.pad(hidden_state, tuple(pad_size), mode='constant', value=0)
         chunks = torch.chunk(hidden_state, self.group_world_size, dim=patch_dim)
         return chunks[self.rank_in_vae_group].clone()

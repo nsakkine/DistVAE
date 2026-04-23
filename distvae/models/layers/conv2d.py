@@ -46,6 +46,7 @@ class PatchConv2d(nn.Conv2d, PatchConvMixin):
         self.block_size = block_size
         self.patch_dim = patch_dim
         self.use_uniform_patch = use_uniform_patch
+        self.halo_buffer = {}
         super().__init__(
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             groups, bias, padding_mode, device, dtype)
@@ -78,7 +79,8 @@ class PatchConv2d(nn.Conv2d, PatchConvMixin):
                 patch_index,
                 group_world_size,
                 rank_in_group,
-            ) = self._multi_rank_metadata_and_halo(input, self.use_uniform_patch)
+                stride_shift,
+            ) = self._multi_rank_metadata_and_halo(input, self.use_uniform_patch, self.halo_buffer)
             conv_res: Tensor
             padding = self._adjust_padding_for_patch(
                 self._reversed_padding_repeated_twice,

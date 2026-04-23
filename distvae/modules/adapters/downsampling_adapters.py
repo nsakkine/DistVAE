@@ -1,4 +1,5 @@
 import torch.nn as nn
+from distvae.models.layers.wan.zeropadconv2d import WanZeroPadConv2d
 from distvae.modules.adapters.layers.conv_adapters import Conv2dAdapter, WanCausalConv3dAdapter
 from distvae.modules.adapters.resnet_adapters import WanResidualBlockAdapter
 from diffusers.models.autoencoders.autoencoder_kl_wan import WanResample, WanResidualDownBlock
@@ -14,6 +15,7 @@ class WanResampleDownAdapter(nn.Module):
         wan_resample: WanResample,
         conv_block_size = 0,
         patch_dim: int = -2,
+        use_uniform_patch: bool = True,
     ):
         super().__init__()
         assert isinstance(wan_resample, WanResample), (
@@ -26,39 +28,71 @@ class WanResampleDownAdapter(nn.Module):
         # Adapt time_conv if present
         if hasattr(wan_resample, "time_conv") and wan_resample.time_conv is not None:
             wan_resample.time_conv = WanCausalConv3dAdapter(
-                wan_resample.time_conv, block_size=conv_block_size, patch_dim=patch_dim
+                wan_resample.time_conv,
+                block_size=conv_block_size,
+                patch_dim=patch_dim,
+                use_uniform_patch=use_uniform_patch,
             )
 
         # Adapt the resample layers
         if isinstance(wan_resample.resample, nn.Sequential):
-            resample = []
+            count = 0
             for layer in wan_resample.resample:
+                count += 1
                 if isinstance(layer, nn.ZeroPad2d):
-                    # Skip ZeroPad2d layers - we'll use symmetric Conv2d padding instead
-                    # Original model: ZeroPad2d(0,1,0,1) + Conv2d(padding=0, stride=2)
-                    # Distributed: Conv2d(padding=1, stride=2)
-                    #
-                    # This changes from asymmetric (0,1,0,1) to symmetric (1,1,1,1) padding,
-                    # which adds 1 extra pixel on left/top edges. However, this is necessary
-                    # for distributed correctness with PatchConv2d's halo exchange mechanism.
-                    # The extra left/top padding is compensated by:
-                    # 1. Adding edge_pad before encoding (in encoder_adapters.py)
-                    # 2. Cropping with offset after encoding (in encoder_adapters.py)
                     continue
                 elif isinstance(layer, nn.Conv2d):
-                    # Set symmetric padding for distributed halo exchange compatibility
-                    layer.padding = (1, 1)
-                    resample.append(
-                        Conv2dAdapter(layer, block_size=conv_block_size, patch_dim=patch_dim)
-                    )
+                    in_channels = layer.in_channels
+                    out_channels = layer.out_channels
+                    kernel_size = layer.kernel_size
+                    if (
+                        isinstance(layer.stride, int) and layer.stride != 2 or
+                        isinstance(layer.stride, tuple) and (layer.stride[0] != 2 or layer.stride[1] != 2)
+                    ):
+                        raise ValueError(f"Unsupported stride: {layer.stride}")
+                    if (
+                        isinstance(layer.padding, int) and layer.padding != 0 or
+                        isinstance(layer.padding, tuple) and (sum(layer.padding) != 0)
+                    ):
+                        raise ValueError(f"Unsupported padding: {layer.padding}")
+                    dilation = layer.dilation
+                    groups = layer.groups
+                    bias = layer.bias is not None
+                    device = layer.weight.device
+                    dtype = layer.weight.dtype
+                    _weight = layer.weight
+                    _bias = layer.bias
                 else:
-                    resample.append(layer)
-            self.resample.resample = nn.Sequential(*resample)
+                    raise ValueError(f"Unsupported layer type: {type(layer)}")
+            if count != 2:
+                raise ValueError(f"WanResampleDownAdapter expects 2 layers, got {count}")
+
+            self.resample.resample = WanZeroPadConv2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                stride=(2, 2),
+                dilation=dilation,
+                groups=groups,
+                bias=bias,
+                device=device,
+                dtype=dtype,
+                reversed_zero_padding=(0, 1, 0, 1),
+                block_size=conv_block_size,
+                patch_dim=patch_dim,
+                use_uniform_patch=use_uniform_patch,                
+            )
+            self.resample.resample.weight.data = _weight.data
+            if _bias is not None:
+                self.resample.resample.bias.data = _bias.data
         else:
             # Single conv layer
             if isinstance(wan_resample.resample, nn.Conv2d):
                 self.resample.resample = Conv2dAdapter(
-                    wan_resample.resample, block_size=conv_block_size, patch_dim=patch_dim
+                    wan_resample.resample,
+                    block_size=conv_block_size,
+                    patch_dim=patch_dim,
+                    use_uniform_patch=use_uniform_patch
                 )
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
@@ -75,6 +109,7 @@ class WanResidualDownBlockAdapter(nn.Module):
         wan_residual_down_block: WanResidualDownBlock,
         conv_block_size = 0,
         patch_dim: int = -2,
+        use_uniform_patch: bool = True,
     ):
         super().__init__()
         assert isinstance(wan_residual_down_block, WanResidualDownBlock), (
@@ -84,22 +119,25 @@ class WanResidualDownBlockAdapter(nn.Module):
             raise ValueError("WanResidualDownBlockAdapter does not support patch_dim F (-3); use H (-2) or W (-1).")
 
         self.down_block = wan_residual_down_block
-
-        # Adapt residual blocks
-        if hasattr(wan_residual_down_block, "resnets") and wan_residual_down_block.resnets is not None:
+        if hasattr(wan_residual_down_block, "resnets"):
             adapted_resnets = []
             for resnet in wan_residual_down_block.resnets:
                 adapted_resnets.append(
-                    WanResidualBlockAdapter(resnet, conv_block_size=conv_block_size, patch_dim=patch_dim)
+                    WanResidualBlockAdapter(
+                        resnet,
+                        conv_block_size=conv_block_size,
+                        patch_dim=patch_dim,
+                        use_uniform_patch=use_uniform_patch
+                    )
                 )
             self.down_block.resnets = nn.ModuleList(adapted_resnets)
-
-        # Adapt downsampler if present (check both singular and plural forms)
         if hasattr(wan_residual_down_block, "downsampler") and wan_residual_down_block.downsampler is not None:
-            # Singular form (5B model, others)
             if isinstance(wan_residual_down_block.downsampler, WanResample):
                 self.down_block.downsampler = WanResampleDownAdapter(
-                    wan_residual_down_block.downsampler, conv_block_size=conv_block_size, patch_dim=patch_dim
+                    wan_residual_down_block.downsampler,
+                    conv_block_size=conv_block_size,
+                    patch_dim=patch_dim,
+                    use_uniform_patch=use_uniform_patch
                 )
         
     def forward(self, hidden_states, feat_cache=None, feat_idx=[0]):
