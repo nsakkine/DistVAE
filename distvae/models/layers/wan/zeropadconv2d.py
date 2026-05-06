@@ -11,7 +11,6 @@ from distvae.models.layers.conv_utils import (
     get_world_size_and_rank,
     correct_end,
     correct_start,
-    build_crop_slice,
 )
 from distvae.models.layers.conv_mixin import PatchConvMixin
 
@@ -21,8 +20,8 @@ class WanZeroPadConv2d(nn.Conv2d, PatchConvMixin):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: _size_2_t,
-        stride: _size_2_t = 1,
+        kernel_size: _size_2_t = 3,
+        stride: _size_2_t = 2,
         dilation: _size_2_t = 1,
         groups: int = 1,
         bias: bool = True,
@@ -31,9 +30,8 @@ class WanZeroPadConv2d(nn.Conv2d, PatchConvMixin):
         reversed_zero_padding: Union[int, _size_4_t] = 0,
         block_size: Union[int, Tuple[int, int, int]] = 0,
         patch_dim: int = -2,
-        use_uniform_patch: bool = False,
+        use_uniform_patch: bool = True,
     ) -> None:
-        """patch_dim: which spatial dim is split (H=-2/2, W=-1/4). block_size: 0 => prefer direct path; int or (H,W) => chunked when any spatial > block_size."""
         if not use_uniform_patch:
             raise NotImplementedError("WanZeroPadConv2d not implemented for use_uniform_patch=False")
         if isinstance(dilation, int):
@@ -52,6 +50,25 @@ class WanZeroPadConv2d(nn.Conv2d, PatchConvMixin):
             assert len(reversed_zero_padding) == 4, "reversed_zero_padding must be a tuple of 4 integers"
         else:
             raise ValueError(f"Unsupported reversed_zero_padding: {type(reversed_zero_padding)}")
+        if (
+            reversed_zero_padding[0] != 0 or
+            reversed_zero_padding[1] != 1 or
+            reversed_zero_padding[2] != 0 or
+            reversed_zero_padding[3] != 1
+        ):
+            raise ValueError(f"Unsupported reversed_zero_padding: {reversed_zero_padding}")
+        # Validate kernel_size and stride
+        if (
+            isinstance(kernel_size, int) and kernel_size != 3 or
+            isinstance(kernel_size, tuple) and (kernel_size[0] != 3 or kernel_size[1] != 3)
+        ):
+            raise ValueError(f"Unsupported kernel_size: {kernel_size}")
+        if (
+            isinstance(stride, int) and stride != 2 or
+            isinstance(stride, tuple) and (stride[0] != 2 or stride[1] != 2)
+        ):
+            raise ValueError(f"Unsupported stride: {stride}")
+
         self.reversed_zero_padding = reversed_zero_padding
         self.block_size = block_size
         self.patch_dim = patch_dim
@@ -81,7 +98,10 @@ class WanZeroPadConv2d(nn.Conv2d, PatchConvMixin):
         bs, channels, h, w = input.shape
         reversed_zero_padding = tuple(self.reversed_zero_padding)
 
-        # Single rank: use standard F.conv2d (with optional padding_mode).
+        patch_dim = self.patch_dim if self.patch_dim >= 0 else input.ndim + self.patch_dim
+        assert input.shape[patch_dim] % 2 == 0, "input.shape[patch_dim] must be even"
+
+        # Single rank: use standard F.conv2d
         if group_world_size == 1:
             output = F.conv2d(
                 F.pad(
@@ -132,7 +152,7 @@ class WanZeroPadConv2d(nn.Conv2d, PatchConvMixin):
             # Conv2d
             output: Tensor
             _, channels, h, w = input.shape
-            # Direct path: one conv over the extended (halo-padded) input, then crop to this rank's patch output.
+            # Direct path: one conv over the extended (halo-padded) input
             if self._use_direct_path(input):
                 output = F.conv2d(
                     input,
@@ -145,7 +165,7 @@ class WanZeroPadConv2d(nn.Conv2d, PatchConvMixin):
                 )
 
                 return output
-            # Chunked path: pad input, split into overlapping chunks along F, H, W; conv each chunk with padding=0; concat outputs; crop to this rank's patch.
+            # Chunked path: pad input, split into overlapping chunks along F, H, W; conv each chunk with padding=0; concat outputs
             else:
                 _, channels, h, w = input.shape
                 if isinstance(self.block_size, int):

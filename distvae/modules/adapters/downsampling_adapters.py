@@ -45,11 +45,7 @@ class WanResampleDownAdapter(nn.Module):
                     in_channels = layer.in_channels
                     out_channels = layer.out_channels
                     kernel_size = layer.kernel_size
-                    if (
-                        isinstance(layer.stride, int) and layer.stride != 2 or
-                        isinstance(layer.stride, tuple) and (layer.stride[0] != 2 or layer.stride[1] != 2)
-                    ):
-                        raise ValueError(f"Unsupported stride: {layer.stride}")
+                    stride = layer.stride
                     if (
                         isinstance(layer.padding, int) and layer.padding != 0 or
                         isinstance(layer.padding, tuple) and (sum(layer.padding) != 0)
@@ -71,7 +67,7 @@ class WanResampleDownAdapter(nn.Module):
                 in_channels=in_channels,
                 out_channels=out_channels,
                 kernel_size=kernel_size,
-                stride=(2, 2),
+                stride=stride,
                 dilation=dilation,
                 groups=groups,
                 bias=bias,
