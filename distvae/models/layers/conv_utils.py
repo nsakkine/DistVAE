@@ -6,6 +6,7 @@ slices for trimming conv output to the local patch, padding adjustment at rank
 boundaries, and halo exchange between neighboring ranks.
 """
 
+import math
 from typing import List, Tuple, Union
 
 import torch
@@ -193,7 +194,6 @@ def build_crop_slice(
     if (global_start is not None and kernel_size is not None and 
         padding is not None and stride is not None and
         input_halo_width is not None and stride > 1):
-        import math
         # Compute valid output indices based on global coordinates
         # The halo region starts at global_start - input_halo_width[0]
         halo_start = global_start - input_halo_width[0]
