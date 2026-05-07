@@ -168,9 +168,6 @@ class PatchConvMixin:
             assert halo_width[0] <= patch_size and halo_width[1] <= patch_size, (
                 "halo width is larger than the patch dimension of input tensor"
             )
-        # Initialize halo buffer cache lazily
-        if not hasattr(self, '_halo_recv_buffers'):
-            self._halo_recv_buffers = {}
 
         input = exchange_halo(
             input,
