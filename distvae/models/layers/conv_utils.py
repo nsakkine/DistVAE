@@ -301,7 +301,7 @@ def exchange_halo(
     blocking recv, then wait on sends.
 
     Args:
-        halo_recv_buffers: Optional dict to cache/reuse recv buffers for better performance
+        halo_buffer: Optional dict to cache/reuse comms buffers for better performance
     """
     ndim = input.ndim
     indices_end = [slice(None)] * ndim
