@@ -27,17 +27,11 @@ from distvae.modules.patch_utils import DePatchify, Patchify
 from distvae.utils import DistributedEnv
 
 
-def reference_wan_zeropad_conv2d(x_5d: torch.Tensor, module: WanZeroPadConv2d) -> torch.Tensor:
-    """
-    Mirror WanZeroPadConv2d single-rank path (group_world_size == 1).
-    Keep in sync with distvae/models/layers/wan/zeropadconv2d.py _conv_forward lines ~85-103.
-    """
-    bs, channels, f, h, w = x_5d.shape
+def reference_wan_zeropad_conv2d(x: torch.Tensor, module: WanZeroPadConv2d) -> torch.Tensor:
     pad = tuple(module.reversed_zero_padding)
-    x4 = x_5d.permute(0, 2, 1, 3, 4).contiguous().view(bs * f, channels, h, w)
-    x4 = F.pad(x4, pad, mode="constant", value=0)
-    y4 = F.conv2d(
-        x4,
+    x = F.pad(x, pad, mode="constant", value=0)
+    y = F.conv2d(
+        x,
         module.weight,
         module.bias,
         module.stride,
@@ -45,8 +39,8 @@ def reference_wan_zeropad_conv2d(x_5d: torch.Tensor, module: WanZeroPadConv2d) -
         module.dilation,
         module.groups,
     )
-    _, cout, h_out, w_out = y4.shape
-    return y4.view(bs, f, cout, h_out, w_out).permute(0, 2, 1, 3, 4).contiguous()
+
+    return y
 
 
 def worker(
@@ -67,15 +61,14 @@ def worker(
 
     torch.manual_seed(seed)
     in_ch, out_ch = 8, 8
-    n, f = 1, 4
-    h, w = 16, 16
+    n, h, w = 1, 16, 16
     if patch_dim == -2:
         assert h % world_size == 0, "H must split evenly for Patchify chunk"
     else:
         assert patch_dim == -1
         assert w % world_size == 0, "W must split evenly for Patchify chunk"
 
-    x_full = torch.randn(n, in_ch, f, h, w, device=device, dtype=torch.float32)
+    x_full = torch.randn(n, in_ch, h, w, device=device, dtype=torch.float32)
     layer = WanZeroPadConv2d(
         in_channels=in_ch,
         out_channels=out_ch,
