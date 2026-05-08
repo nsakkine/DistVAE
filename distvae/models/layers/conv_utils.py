@@ -191,46 +191,41 @@ def build_crop_slice(
         Tuple of slices suitable for indexing the conv output tensor.
     """
     # If we have global position info, compute exact output range
-    if (global_start is not None and kernel_size is not None and 
+    if (global_start is not None and kernel_size is not None and
         padding is not None and stride is not None and
         input_halo_width is not None and stride > 1):
-        # Compute valid output indices based on global coordinates
-        # The halo region starts at global_start - input_halo_width[0]
+
         halo_start = global_start - input_halo_width[0]
-
-        # min_i: first valid output index (in output space)
-        # An output at index i comes from input range [i*stride - padding, i*stride - padding + kernel_size)
-        # For it to be valid at this rank, it must not depend on data before global halo start
-        min_i = math.ceil(((-padding) - halo_start) / stride)
-        min_i = max(0, min_i)
-
-        # max_i: last valid output index
-        # Must not depend on data beyond this rank's patch end
         patch_end = global_start + patch_size
-        max_i = math.floor(((patch_end - 1 + padding) - (kernel_size - 1) - halo_start) / stride)
+        half_k = (kernel_size - 1) // 2
 
-        # Clamp to actual output size
-        max_i = min(max_i, out_len - 1)
+        # Global output indices owned by this rank (kernel-center convention,
+        # matching calc_top_halo_width / calc_bottom_halo_width).
+        # Output i has its kernel center at  i*stride + half_k - padding  in input space.
+        min_i_global = math.ceil((global_start + padding - half_k) / stride)
+        max_i_global = math.floor((patch_end - 1 + padding - half_k) / stride)
 
-        # Crop to [min_i : max_i + 1]
-        patch_slice = slice(min_i, max_i + 1)
+        # Map global output indices to local output indices. Only rank 0 keeps the
+        # left-side padding; all other ranks have it zeroed by adjust_padding_for_patch.
+        local_pad_left = padding if global_start == 0 else 0
+        # (local_pad_left - padding - halo_start) is always a multiple of stride
+        # by construction of input_halo_width[0]; use //.
+        shift = (local_pad_left - padding - halo_start) // stride
+
+        min_j = max(0, min_i_global + shift)
+        max_j = min(out_len - 1, max_i_global + shift)
+
+        if min_j > max_j:
+            patch_slice = slice(0, 0)  # empty
+        else:
+            patch_slice = slice(min_j, max_j + 1)
+
     elif out_len == patch_size:
-        # No halo in output, simple case
         patch_slice = slice(0, patch_size)
     else:
-        # Fall back to halo-based cropping (works for stride=1)
-        # For stride=1, output halo width equals input halo width
-        # For stride>1, we should use the global position method, but if we're here
-        # it means the params weren't provided, so use simple division as approximation
-        if stride is not None and stride > 1:
-            # Estimate output patch size from input patch size
-            expected_output_size = (patch_size + stride - 1) // stride
-            output_halo_top = halo_width[0] // stride if halo_width else 0
-            patch_slice = slice(output_halo_top, output_halo_top + expected_output_size)
-        else:
-            # stride=1 case
-            output_halo_top = halo_width[0] if halo_width else 0
-            patch_slice = slice(output_halo_top, output_halo_top + patch_size)
+        # stride == 1: output halo width equals input halo width.
+        output_halo_top = halo_width[0] if halo_width else 0
+        patch_slice = slice(output_halo_top, output_halo_top + patch_size)
 
     return (
         (slice(None),) * patch_dim
