@@ -74,6 +74,11 @@ class WanResidualBlockAdapter(nn.Module):
             patch_dim=patch_dim,
             use_uniform_patch=use_uniform_patch
         )
+        # Adapt conv_shortcut if it's not nn.Identity
+        if not isinstance(wan_residual_block.conv_shortcut, nn.Identity):
+            self.residual_block.conv_shortcut = WanCausalConv3dAdapter(
+                wan_residual_block.conv_shortcut, block_size=conv_block_size, patch_dim=patch_dim
+            )
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         return self.residual_block(x, feat_cache=feat_cache, feat_idx=feat_idx)

@@ -6,6 +6,7 @@ slices for trimming conv output to the local patch, padding adjustment at rank
 boundaries, and halo exchange between neighboring ranks.
 """
 
+import math
 from typing import List, Tuple, Union
 
 import torch
@@ -162,28 +163,70 @@ def build_crop_slice(
     halo_width: tuple,
     out_len: int,
     ndim: int,
+    global_start: int = None,
+    kernel_size: int = None,
+    padding: int = None,
+    stride: int = None,
+    input_halo_width: tuple = None,
 ) -> tuple:
     """Build a tuple of slices to crop conv output to the valid patch region.
 
-    Returns a tuple of length ndim. Along patch_dim: if out_len == patch_size
-    (no halo in output) use slice(0, patch_size); otherwise use
-    slice(halo_width[0], halo_width[0] + patch_size). All other dimensions
-    are slice(None).
+    When global position information is provided (global_start, etc.),
+    computes exact output indices based on global coordinates to ensure alignment
+    across ranks (critical for stride > 1). Otherwise falls back to simple halo-based crop.
 
     Args:
         patch_dim: The spatial dimension that is split across ranks (0-based).
-        patch_size: Size of this rank's patch along patch_dim.
-        halo_width: (top_halo_width, bottom_halo_width) in output space.
+        patch_size: Size of this rank's patch along patch_dim (input space).
+        halo_width: (top_halo_width, bottom_halo_width) in input space before conv.
         out_len: Length of the full conv output along patch_dim.
         ndim: Number of dimensions (4 for 2D conv, 5 for 3D).
+        global_start: Global start index of this rank's patch (for stride alignment).
+        kernel_size: Kernel size along patch_dim (for exact output calculation).
+        padding: Padding along patch_dim.
+        stride: Stride along patch_dim.
+        input_halo_width: (top, bottom) halo in input space.
 
     Returns:
         Tuple of slices suitable for indexing the conv output tensor.
     """
-    if out_len == patch_size:
+    # If we have global position info, compute exact output range
+    if (global_start is not None and kernel_size is not None and
+        padding is not None and stride is not None and
+        input_halo_width is not None and stride > 1):
+
+        halo_start = global_start - input_halo_width[0]
+        patch_end = global_start + patch_size
+        half_k = (kernel_size - 1) // 2
+
+        # Global output indices owned by this rank (kernel-center convention,
+        # matching calc_top_halo_width / calc_bottom_halo_width).
+        # Output i has its kernel center at  i*stride + half_k - padding  in input space.
+        min_i_global = math.ceil((global_start + padding - half_k) / stride)
+        max_i_global = math.floor((patch_end - 1 + padding - half_k) / stride)
+
+        # Map global output indices to local output indices. Only rank 0 keeps the
+        # left-side padding; all other ranks have it zeroed by adjust_padding_for_patch.
+        local_pad_left = padding if global_start == 0 else 0
+        # (local_pad_left - padding - halo_start) is always a multiple of stride
+        # by construction of input_halo_width[0]; use //.
+        shift = (local_pad_left - padding - halo_start) // stride
+
+        min_j = max(0, min_i_global + shift)
+        max_j = min(out_len - 1, max_i_global + shift)
+
+        if min_j > max_j:
+            patch_slice = slice(0, 0)  # empty
+        else:
+            patch_slice = slice(min_j, max_j + 1)
+
+    elif out_len == patch_size:
         patch_slice = slice(0, patch_size)
     else:
-        patch_slice = slice(halo_width[0], halo_width[0] + patch_size)
+        # stride == 1: output halo width equals input halo width.
+        output_halo_top = halo_width[0] if halo_width else 0
+        patch_slice = slice(output_halo_top, output_halo_top + patch_size)
+
     return (
         (slice(None),) * patch_dim
         + (patch_slice,)
@@ -251,6 +294,9 @@ def exchange_halo(
     bottom halo from next (halo_width[1]). Concatenate [top_halo_recv, input,
     bottom_halo_recv] along patch_dim and return. Uses non-blocking isend and
     blocking recv, then wait on sends.
+
+    Args:
+        halo_buffer: Optional dict to cache/reuse comms buffers for better performance
     """
     ndim = input.ndim
     indices_end = [slice(None)] * ndim

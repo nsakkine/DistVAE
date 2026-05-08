@@ -168,6 +168,7 @@ class PatchConvMixin:
             assert halo_width[0] <= patch_size and halo_width[1] <= patch_size, (
                 "halo width is larger than the patch dimension of input tensor"
             )
+
         input = exchange_halo(
             input,
             patch_dim,
@@ -179,6 +180,20 @@ class PatchConvMixin:
             rank_in_group,
             halo_buffer,
         )
+
+        # Stride alignment: when stride > 1, we need to align input to global stride grid
+        # to ensure output indices match across ranks (prevents border artifacts)
+        stride_shift = 0
+        if halo_width[0] > 0 and stride_patch_dim > 1:
+            global_start = patch_index[rank_in_group]
+            shift = (global_start - halo_width[0] + padding_patch_dim) % stride_patch_dim
+            if shift != 0:
+                stride_shift = shift
+                # Trim `shift` pixels from the top to align to stride grid
+                trim_slice = [slice(None)] * input.ndim
+                trim_slice[patch_dim] = slice(shift, None)
+                input = input[tuple(trim_slice)]
+                halo_width = (max(0, halo_width[0] - shift), halo_width[1])
         return (
             input,
             patch_dim,
@@ -190,4 +205,5 @@ class PatchConvMixin:
             patch_index,
             group_world_size,
             rank_in_group,
+            stride_shift,
         )

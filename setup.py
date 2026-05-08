@@ -12,7 +12,7 @@ if __name__ == "__main__":
         author="Jinzhe Pan",
         author_email="eigensystem1318@gmail.com",
         packages=find_packages(),
-        install_requires=["torch>=2.2", "diffusers>=0.27.2", "transformers"],
+        install_requires=["torch>=2.2", "diffusers>=0.35.0", "transformers"],
         extras_require={
             "dev": [
                 "pytest",

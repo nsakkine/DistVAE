@@ -28,6 +28,7 @@ class WanAttentionBlockAdapter(torch.nn.Module):
         world_size = DistributedEnv.get_group_world_size()
         device = hidden_states.device
 
+        # Gather chunk sizes from all ranks
         size_list = [torch.empty(1, dtype=torch.int64, device=device) for _ in range(world_size)]
         dist.all_gather(
             size_list,

@@ -63,7 +63,7 @@ class TestCalcTopHaloWidth:
             calc_top_halo_width(1, [0, 10, 20], 3, 0, 0)
 
     def test_invalid_padding(self):
-        with pytest.raises(AssertionError, match="padding should not smaller"):
+        with pytest.raises(AssertionError, match="padding should not be smaller than 0"):
             calc_top_halo_width(1, [0, 10, 20], 3, -1, 1)
 
 
@@ -94,7 +94,7 @@ class TestCalcBottomHaloWidth:
             calc_bottom_halo_width(1, [0, 10, 20], 3, 0, 0)
 
     def test_invalid_padding(self):
-        with pytest.raises(AssertionError, match="padding should not smaller"):
+        with pytest.raises(AssertionError, match="padding should not be smaller than 0"):
             calc_bottom_halo_width(1, [0, 10, 20], 3, -1, 1)
 
 
