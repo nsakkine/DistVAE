@@ -31,7 +31,7 @@ class Conv2dModules(nn.Module):
         for conv in self.convs:
             x = conv(x)
         return x
-            
+
 
 def set_seed(seed: int = 42):
     random.seed(seed)
@@ -54,11 +54,6 @@ def main():
         default=1024,
         help="The width of image",
     )
-    parser.add_argument(
-        "--test-odd-sizes",
-        action="store_true",
-        help="Test with odd-sized inputs that require stride alignment",
-    )
     args = parser.parse_args()
     backend = DistributedEnv.get_torch_distributed_backend()
     dist.init_process_group(backend=backend)
@@ -74,16 +69,24 @@ def main():
         (3, 1, 1),  # kernel=3, stride=1, padding=1 (original test)
         (3, 2, 1),  # kernel=3, stride=2, padding=1 (downsampling with stride alignment)
     ]
-
-    # Test with both even and odd sizes when requested
-    # Note: Odd sizes with stride>1 currently have a known issue (off-by-one errors)
-    # For stride=1, odd sizes work correctly
-    test_sizes = [(args.height, args.width)]
-    if args.test_odd_sizes:
-        test_sizes.extend([
-            (721, 1281),  # Odd sizes - TODO: fix stride>1 support for odd dimensions
-            (719, 1279),  # Different odd sizes
-        ])
+    if args.height != 1024 or args.width != 1024:
+        test_sizes = [
+            (args.height, args.width),
+        ]
+    else:
+        test_sizes = [
+            # 1k
+            (1024, 1024),
+            (1023, 1025),
+            (1025, 1023),
+            # 720p
+            (720, 1280),
+            (721, 1281), 
+            (719, 1279),
+            (1280, 720),
+            (1281, 721),
+            (1279, 719),
+        ]
 
     for kernel_size, stride, padding in test_configs:
         for height, width in test_sizes:

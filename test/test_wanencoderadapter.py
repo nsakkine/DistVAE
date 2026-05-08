@@ -17,6 +17,9 @@ from torch.multiprocessing import spawn
 
 from distvae.utils import DistributedEnv
 
+autoencoder_kl_wan = pytest.importorskip(
+    "diffusers.models.autoencoders.autoencoder_kl_wan"
+)
 
 def worker(
     rank: int,
@@ -36,16 +39,8 @@ def worker(
 
     torch.manual_seed(seed)
 
-    # Create real WanEncoder3d
-    try:
-        from diffusers.models.autoencoders.autoencoder_kl_wan import WanEncoder3d
-    except ImportError:
-        if rank == 0:
-            print("Skipping test - diffusers with Wan VAE not available")
-        dist.destroy_process_group()
-        return
-
     # Create a small encoder: 3 spatial downsamples (8x reduction)
+    WanEncoder3d = autoencoder_kl_wan.WanEncoder3d
     encoder = WanEncoder3d(
         in_channels=3,
         dim=32,  # Small for testing
